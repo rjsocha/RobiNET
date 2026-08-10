@@ -251,7 +251,7 @@ func (d *Daemon) Refresh(ctx context.Context) {
 			continue
 		}
 
-		if err := d.run.reload(conn, table, d.state.Families(), d.state.Inbound()); err != nil {
+		if err := d.run.reload(conn, table, d.state.choices()); err != nil {
 			d.log.Warn("could not apply the route table", "instance", conn.Name, "error", err)
 		}
 	}
@@ -282,7 +282,7 @@ func (d *Daemon) startConnection(conn *Connection, table *hub.RouteTable) error 
 		return fmt.Errorf("%s is already carried by the connection to %s, one route table cannot hold both", prefix, other)
 	}
 
-	return d.run.start(conn, table, d.state.Families(), d.state.Inbound(), d.log)
+	return d.run.start(conn, table, d.state.choices(), d.log)
 }
 
 // collect asks whether a pending join has been granted.

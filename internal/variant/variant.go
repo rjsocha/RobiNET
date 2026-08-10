@@ -42,6 +42,17 @@ type Config struct {
 	// Note is shown once at registration, for whatever the person handing out
 	// this binary wants to say.
 	Note string `json:"note,omitempty"`
+
+	// Cheat allows the workarounds for other people's programs. Off unless a
+	// variant asks for it, so a build handed to anybody else has no command
+	// for them, no way to switch one on, and no trace of them in its help.
+	Cheat bool `json:"cheat,omitempty"`
+}
+
+// Cheating reports whether this build allows the workarounds.
+func Cheating() bool {
+	cfg, ok := Load()
+	return ok && cfg.Cheat
 }
 
 var (

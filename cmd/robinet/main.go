@@ -89,6 +89,12 @@ network being exposed, with no capabilities and no tun device.`,
 		newVersionCmd(),
 	)
 
+	// Only on a build that asked for them. Anywhere else the command does not
+	// exist, so it is in no help text and in no completion.
+	if variant.Cheating() {
+		root.AddCommand(newCheatCmd())
+	}
+
 	return root
 }
 

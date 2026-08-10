@@ -33,7 +33,7 @@ func newRunners() *runners {
 	return &runners{running: map[string]*runner{}}
 }
 
-func (rs *runners) start(conn *Connection, table *hub.RouteTable, families, inbound string, log *slog.Logger) error {
+func (rs *runners) start(conn *Connection, table *hub.RouteTable, local choices, log *slog.Logger) error {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
@@ -41,7 +41,7 @@ func (rs *runners) start(conn *Connection, table *hub.RouteTable, families, inbo
 		return nil
 	}
 
-	raw, err := renderConfig(conn, table, families, inbound)
+	raw, err := renderConfig(conn, table, local)
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func (rs *runners) start(conn *Connection, table *hub.RouteTable, families, inbo
 
 // reload pushes a new route table into a running nebula, which is how a
 // connector admitted a minute ago becomes reachable without a restart.
-func (rs *runners) reload(conn *Connection, table *hub.RouteTable, families, inbound string) error {
+func (rs *runners) reload(conn *Connection, table *hub.RouteTable, local choices) error {
 	rs.mu.Lock()
 	r, ok := rs.running[conn.InstanceID]
 	rs.mu.Unlock()
@@ -81,7 +81,7 @@ func (rs *runners) reload(conn *Connection, table *hub.RouteTable, families, inb
 		return nil
 	}
 
-	raw, err := renderConfig(conn, table, families, inbound)
+	raw, err := renderConfig(conn, table, local)
 	if err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func (rs *runners) isRunning(instance string) bool {
 //
 // The routes come from the hub rather than from anything local: a member
 // consumes the table, it does not own it.
-func renderConfig(conn *Connection, table *hub.RouteTable, families, inbound string) ([]byte, error) {
+func renderConfig(conn *Connection, table *hub.RouteTable, local choices) ([]byte, error) {
 	if !conn.Ready() {
 		return nil, fmt.Errorf("connection to %s has no certificate yet", conn.Name)
 	}
@@ -141,12 +141,28 @@ func renderConfig(conn *Connection, table *hub.RouteTable, families, inbound str
 		// A machine that installs one family only still holds a certificate
 		// for both, and still reaches the lighthouse. This decides what goes
 		// on the device, nothing else.
-		if !wantedFamily(families, r.Prefix) {
+		if !wantedFamily(local.families, r.Prefix) {
 			continue
 		}
 		routes = append(routes, map[string]any{
 			"route": r.Prefix.String(),
 			"via":   r.Via.String(),
+		})
+	}
+
+	if local.chromiumProbeRoute && conn.Address6.IsValid() && wantedFamily(local.families, chromiumProbe) {
+		// The route has to exist for Chromium's probe to succeed, and it has
+		// to lead nowhere: nothing is meant to arrive. Via the lighthouse
+		// because a via has to be somebody, and a packet that really goes
+		// there is dropped at the far end rather than starting a handshake
+		// with an address nobody holds.
+		//
+		// Only where the device has an IPv6 address of its own: without one
+		// the kernel has no source to answer with and the probe fails anyway,
+		// leaving a hijacked address and nothing gained.
+		routes = append(routes, map[string]any{
+			"route": chromiumProbe.String(),
+			"via":   lighthouse,
 		})
 	}
 
@@ -212,7 +228,7 @@ func renderConfig(conn *Connection, table *hub.RouteTable, families, inbound str
 			// What members of this instance may reach here. Ping by default:
 			// joining an instance to reach a network is not an offer to be
 			// reached back.
-			"inbound": inboundRules(inbound),
+			"inbound": inboundRules(local.inbound),
 		},
 		"logging": map[string]any{
 			"level":  "info",

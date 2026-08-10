@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/rjsocha/robinet/internal/hub"
+	"github.com/rjsocha/robinet/internal/variant"
 	"github.com/rjsocha/robinet/internal/version"
 	"golang.org/x/sys/unix"
 )
@@ -58,6 +59,10 @@ type Status struct {
 	// and Inbound is what members of an instance may reach here.
 	Families string `json:"families,omitempty"`
 	Inbound  string `json:"inbound,omitempty"`
+
+	// Cheats are the workarounds that are on, as "<vendor>/<name>". Reported
+	// because a hack nothing mentions is a hack somebody debugs twice.
+	Cheats []string `json:"cheats,omitempty"`
 
 	// Version is the build the daemon is running, which is not the build that
 	// asked: upgrading replaces the binary and leaves the service on the old
@@ -120,6 +125,11 @@ func (d *Daemon) Serve(ctx context.Context, path string) error {
 	mux.HandleFunc("POST /member/remove", d.handleRemoveMember)
 	mux.HandleFunc("POST /restart", d.handleRestart)
 	mux.HandleFunc("POST /families", d.handleFamilies)
+	if variant.Cheating() {
+		// Not registered otherwise: a build that does not allow the
+		// workarounds has no way to be asked for one, socket or not.
+		mux.HandleFunc("POST /cheat", d.handleCheat)
+	}
 	mux.HandleFunc("POST /dns", d.handleDNSPlan)
 	mux.HandleFunc("POST /alias", d.handleAlias)
 	mux.HandleFunc("POST /inbound", d.handleInbound)
@@ -317,6 +327,38 @@ func (d *Daemon) handleFamilies(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"families": d.state.Families()})
 }
 
+// CheatRequest turns one workaround on or off. One endpoint for all of them:
+// a cheat exists because somebody else's program does something, so the set of
+// them grows and shrinks with other people's releases.
+type CheatRequest struct {
+	Vendor string `json:"vendor"`
+	Name   string `json:"name"`
+	On     bool   `json:"on"`
+}
+
+func (d *Daemon) handleCheat(w http.ResponseWriter, r *http.Request) {
+	var req CheatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	if err := d.state.SetCheat(req.Vendor, req.Name, req.On); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	// Rebuilt now, so the route appears or disappears with the command rather
+	// than at the next restart.
+	d.Refresh(r.Context())
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"vendor": req.Vendor,
+		"name":   req.Name,
+		"on":     d.state.Cheat(req.Vendor, req.Name),
+	})
+}
+
 func (d *Daemon) handleRestart(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"version": version.String()})
 
@@ -345,6 +387,7 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Version:  version.String(),
 		Families: d.state.Families(),
 		Inbound:  d.state.Inbound(),
+		Cheats:   d.state.CheatsOn(),
 	}
 	d.state.Read(func(s *data) {
 		status.Hub = s.HubURL

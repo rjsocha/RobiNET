@@ -10,10 +10,12 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/rjsocha/robinet/internal/enroll"
+	"github.com/rjsocha/robinet/internal/variant"
 )
 
 // Owned is an instance this machine created, and the authority that goes with
@@ -104,6 +106,10 @@ type data struct {
 	// an offer to be reached back, and nothing about it belongs to the
 	// instance: the machine that carries the consequence makes the decision.
 	Inbound string `json:"inbound,omitempty"`
+
+	// Cheats are the workarounds this machine applies, keyed by
+	// "<vendor>/<name>". Absent unless somebody went looking for one.
+	Cheats map[string]bool `json:"cheats,omitempty"`
 
 	// Aliases are extra names for a name space, chosen here and told to
 	// nobody: <alias> answers exactly as <canonical> does. Keyed by the alias,
@@ -363,6 +369,105 @@ func inboundRules(inbound string) []map[string]any {
 			{"port": "any", "proto": "icmp", "host": "any"},
 		}
 	}
+}
+
+// A cheat works around behaviour that belongs to somebody else's program and
+// cannot be argued with. It is named after whose behaviour it is, so that the
+// day the behaviour changes there is no doubt about what to delete.
+const (
+	// CheatChromium covers Chrome, Chromium and everything else built on it.
+	CheatChromium = "chromium"
+
+	// CheatChromiumProbeRoute makes Chromium believe this machine has global
+	// IPv6. Chromium decides whether to ask for AAAA at all by connecting a
+	// UDP socket to Google's public resolver: nothing is sent, so a route
+	// that leads nowhere passes the test. Without it an IPv6 only network
+	// stays unreachable from the browser however well the tunnel works.
+	CheatChromiumProbeRoute = "fake-aaaa-global-conectivity-route"
+)
+
+// chromiumProbe is the address Chromium tries. Google's public resolver, and
+// hijacking it is the price of the cheat: while it is installed, that resolver
+// is unreachable over IPv6 from this machine.
+var chromiumProbe = netip.MustParsePrefix("2001:4860:4860::8888/128")
+
+// ValidCheat reports whether a vendor and a name name a cheat that exists.
+func ValidCheat(vendor, name string) bool {
+	return vendor == CheatChromium && name == CheatChromiumProbeRoute
+}
+
+func cheatKey(vendor, name string) string { return vendor + "/" + name }
+
+// Cheat reports whether one is on.
+func (s *State) Cheat(vendor, name string) bool {
+	var on bool
+	s.Read(func(d *data) { on = d.Cheats[cheatKey(vendor, name)] })
+	return on
+}
+
+// SetCheat turns one on or off. Off removes the entry: state carries what was
+// asked for, not the history of what was tried.
+func (s *State) SetCheat(vendor, name string, on bool) error {
+	if !ValidCheat(vendor, name) {
+		return fmt.Errorf("%s is not a cheat this knows", cheatKey(vendor, name))
+	}
+	return s.Write(func(d *data) error {
+		if !on {
+			delete(d.Cheats, cheatKey(vendor, name))
+			return nil
+		}
+		if d.Cheats == nil {
+			d.Cheats = map[string]bool{}
+		}
+		d.Cheats[cheatKey(vendor, name)] = true
+		return nil
+	})
+}
+
+// CheatsOn lists the ones that are on, as "<vendor>/<name>". Empty on a build
+// that does not allow them, whatever the state file says, because that is what
+// such a build is actually doing.
+func (s *State) CheatsOn() []string {
+	if !variant.Cheating() {
+		return nil
+	}
+
+	var out []string
+	s.Read(func(d *data) {
+		for key, on := range d.Cheats {
+			if on {
+				out = append(out, key)
+			}
+		}
+	})
+	sort.Strings(out)
+	return out
+}
+
+// choices is everything this machine decided for itself, read in one go so a
+// connection is built against one consistent answer.
+type choices struct {
+	families string
+	inbound  string
+
+	chromiumProbeRoute bool
+}
+
+func (s *State) choices() choices {
+	c := choices{families: FamiliesBoth, inbound: InboundPing}
+	s.Read(func(d *data) {
+		if ValidFamilies(d.Families) {
+			c.families = d.Families
+		}
+		if ValidInbound(d.Inbound) {
+			c.inbound = d.Inbound
+		}
+		// The build decides as well as the state file: a state file written by
+		// a build that allowed cheats must not keep one alive under a build
+		// that does not.
+		c.chromiumProbeRoute = variant.Cheating() && d.Cheats[cheatKey(CheatChromium, CheatChromiumProbeRoute)]
+	})
+	return c
 }
 
 // Aliases returns the extra names this machine answers under.
