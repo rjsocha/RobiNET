@@ -1,0 +1,60 @@
+name: robinet-ipv6
+
+# The same as ../connector, with one difference that is the whole point: the
+# network being exposed has no IPv4 at all. It is what Railway looks like once
+# the shared 10.128.0.0/9 is dropped, and the case that used to fail silently.
+networks:
+  default:
+    name: robinet-ipv6-net
+    enable_ipv6: true
+
+    # Without this docker gives the network an IPv4 subnet as well, and then
+    # the demo quietly stops being about IPv6.
+    enable_ipv4: false
+    ipam:
+      config:
+        - subnet: fd31:6::/64
+
+  robinet:
+    name: robinet-demo
+    external: true
+
+services:
+  mysql:
+    image: mysql:latest
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "root"
+      MYSQL_DATABASE: "example"
+      MYSQL_USER: "example"
+      MYSQL_PASSWORD: "example"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  vpn:
+    image: wyga/robinet:1
+    restart: unless-stopped
+
+    # Started by hand, like the other example: see ../README.md.
+    profiles: [connector]
+
+    networks:
+      - default
+      - robinet
+    environment:
+      ROBINET_ENDPOINT: 250.250.250.250/example/demo
+      ROBINET_NAME: warehouse
+
+      # Only the IPv6 network. Nothing here has an IPv4 address to announce.
+      ROBINET_ANNOUNCE_ROUTES: fd31:6::/64
+      ROBINET_DISABLE_AUTODISCOVER: "1"
+      ROBINET_DOMAINS: robinet-ipv6-net
+    volumes:
+      - vpn:/data
+
+volumes:
+  vpn:

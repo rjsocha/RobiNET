@@ -1,0 +1,86 @@
+# Deploy and Host RobiNET Connector on Railway
+
+Reach a Railway environment's internal services from your own machine, without
+publishing a port. RobiNET Connector is a VPN forwarder: deployed into an
+environment, it joins an encrypted mesh you control and carries that
+environment's private network into it, so `*.railway.internal` names resolve
+and connect from outside Railway. It dials out, opens no port, and needs no
+public URL.
+
+Source, hub setup and the manual: [github.com/rjsocha/robinet](https://github.com/rjsocha/robinet)
+
+## About Hosting RobiNET Connector
+
+**This is not plug and play. It requires a self-hosted RobiNET hub** on a
+public address, and an instance on it that you own. There is no service to sign
+up for: the hub is the same binary run with different arguments, on any machine
+with a public IP, and it is what this connector enrolls with.
+
+Deploy this into the environment whose network you want to reach.
+
+On start it enrolls with the hub named in `ROBINET_ENDPOINT` and waits. Nothing
+is granted until the owner of that mesh approves it on their own machine, with
+a key the hub has never seen. Once approved the tunnel comes up on its own and
+stays up.
+
+## Common Use Cases
+
+- Connect to a private Postgres, Redis or MySQL from a laptop, without a public
+  proxy and without publishing a port
+- Give a colleague access to one environment's internal services, admitted by
+  name and revocable, rather than sharing credentials to a public endpoint
+- Reach an internal HTTP service from CI or from another provider, over one
+  encrypted mesh rather than several tunnels
+
+## Dependencies for RobiNET Connector Hosting
+
+- A RobiNET hub on a public address, and an instance on it that you own
+- An IPv6 address pool on that hub. Every project on Railway is handed the same
+  private IPv4 range, so it identifies nothing and this connector carries IPv6
+  only. Without a pool the approval succeeds and the connector carries nothing
+
+### Deployment Dependencies
+
+- [RobiNET](https://github.com/rjsocha/robinet) - source, hub setup and the
+  manual
+
+### Implementation Details
+
+Set one variable, `ROBINET_ENDPOINT`, to the line `robinet instance show`
+prints for your instance:
+
+```
+ROBINET_ENDPOINT=hub.example.com/my-instance/shared-token
+```
+
+The template ships with `CHANGEME`, and a connector that finds it says so and
+exits rather than trying to connect anywhere.
+
+Optional:
+
+| Variable | What it does |
+|---|---|
+| `ROBINET_NAME` | what the owner sees when deciding whether to admit this connector |
+| `ROBINET_DOMAINS` | domains it can resolve, on top of the search list it detects |
+| `ROBINET_ANNOUNCE_ROUTES` | prefixes to carry, on top of what it detects |
+| `ROBINET_DISABLE_AUTODISCOVER` | stop detecting either, and carry only what was given |
+| `ROBINET_KEEP_PLATFORM_IPV4` | carry the platform's IPv4 range as well, when it is one you know is yours |
+
+Then, on the machine that owns the instance:
+
+```
+robinet member pending
+robinet member approve <id>
+```
+
+`member pending` shows what approving would call this connector, before the
+decision - `ROBINET_NAME`, or what the platform reports if it was left unset.
+`approve --name` overrides it.
+
+## Why Deploy RobiNET Connector on Railway?
+
+<!-- Recommended: Keep this section as shown below -->
+Railway is a singular platform to deploy your infrastructure stack. Railway will host your infrastructure so you don't have to deal with configuration, while allowing you to vertically and horizontally scale it.
+
+By deploying RobiNET Connector on Railway, you are one step closer to supporting a complete full-stack application with minimal burden. Host your servers, databases, AI agents, and more on Railway.
+<!-- End recommended section -->

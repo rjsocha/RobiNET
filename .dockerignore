@@ -1,0 +1,5 @@
+dist/
+.artifacts/
+variant/
+doc/
+.git/

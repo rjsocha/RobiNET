@@ -1,0 +1,7 @@
+{
+  "hub": "https://hub.example.com:8443",
+  "token": "the-hubs-registry-token",
+  "pin": "sha256/REPLACE-WITH-THE-HUBS-PUBLIC-KEY-HASH-FROM-hub---test",
+  "insecure": false,
+  "note": "Ask the owner of the network you need for its instance name, then: robinet instance attach <name>"
+}

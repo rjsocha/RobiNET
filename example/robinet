@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#
+# robinet, as this demo's tenant sees it.
+#
+# The daemon runs in a container here, so every command has to go into it. This
+# is a shortcut for that and nothing else: ./robinet status is
+# docker compose exec tenant robinet status.
+set -eufo pipefail
+IFS=$'\t\n'
+
+cd "$(dirname "$0")/tenant"
+
+# -T when there is no terminal, so this works from a script as well as from a
+# prompt: docker refuses to allocate one it cannot attach to.
+if [ -t 0 ]; then
+  exec docker compose exec tenant robinet "$@"
+fi
+
+exec docker compose exec -T tenant robinet "$@"

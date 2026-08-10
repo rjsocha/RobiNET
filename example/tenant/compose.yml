@@ -1,0 +1,46 @@
+name: robinet-tenant
+
+# Linux only. This is the operator's side: it holds the certificate authority
+# for the instances it creates and decides who joins them.
+#
+# Unlike the hub and the connector it needs a real interface, because it routes
+# for whatever shares its network namespace. That is one capability and one
+# device, and nothing else.
+networks:
+  robinet:
+    # Created by ../hub. Docker isolates bridge networks from each other, so
+    # reaching the hub means being on its network rather than routing to it.
+    name: robinet-demo
+    external: true
+
+services:
+  tenant:
+    image: wyga/robinet:1
+    restart: unless-stopped
+    networks:
+      robinet:
+        ipv4_address: 250.250.250.251
+    command:
+      - up
+      - --state
+      - /data/tenant.json
+      - --socket
+      - /run/robinet/robinet.sock
+    cap_add:
+      # Creating the tun device, addressing it and installing routes. The
+      # daemon wants no other privilege, so nothing else is granted.
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    volumes:
+      # The registration, the authority for every instance created here and the
+      # certificate for every instance joined. Losing it loses the instances:
+      # nobody else has a copy of a signing key.
+      - state:/data
+
+      # The ssh key this machine registers with, generated here by ../demo.sh.
+      # The hub was given the public half and nothing else.
+      - ./secret/tenant_ed25519:/run/secrets/binder_key:ro
+
+volumes:
+  state:

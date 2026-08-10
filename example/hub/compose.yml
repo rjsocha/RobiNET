@@ -1,0 +1,56 @@
+name: robinet-hub
+
+# Linux only, and deliberately: the hub sits on a named bridge with a fixed
+# address instead of publishing ports.
+#
+# Publishing would break it. A lighthouse learns where a member is from the
+# source address of its packets, and docker's userland proxy replaces that
+# address with its own, so every member would look like it came from the same
+# place and nothing could be told apart or punched through to. On the bridge
+# the packets arrive as they were sent.
+networks:
+  robinet:
+    name: robinet-demo
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: robinet-demo
+    ipam:
+      config:
+        - subnet: 250.250.250.248/29
+          gateway: 250.250.250.249
+
+# The hub holds no signing key and runs its lighthouses with the tun device
+# disabled, so it needs no capabilities and no /dev/net/tun.
+#
+# Same image as the connector and the tenant. Only the arguments differ.
+services:
+  hub:
+    image: wyga/robinet:1
+    restart: unless-stopped
+    networks:
+      robinet:
+        # Fixed, because it is written into a certificate and into every
+        # connector's environment. A hub that moved would be a hub nobody
+        # could find.
+        ipv4_address: 250.250.250.250
+    command:
+      - hub
+      - run
+      - --config
+      - /etc/robinet/hub.yaml
+      - --config-dir
+      - /etc/robinet/binder
+    volumes:
+      # Fixed, committed, no secrets in it beyond a token that grants nothing
+      # on its own.
+      - ./hub.yaml:/etc/robinet/hub.yaml:ro
+
+      # Written by prepare.sh from the key it generates.
+      - ./secret/binder:/etc/robinet/binder:ro
+
+      # Instances, members, requests and the route table. Losing it means every
+      # tenant registering again and every connector enrolling again.
+      - state:/var/lib/robinet
+
+volumes:
+  state:

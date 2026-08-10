@@ -1,0 +1,85 @@
+name: robinet-ipv4
+
+# A network with nothing published: mysql listens on the compose network and
+# nowhere else. The connector is what makes it reachable from somewhere with no
+# route to it, without opening a port on the host.
+networks:
+  # The compose network being exposed. Nothing reaches it from outside.
+  #
+  # A fixed subnet, because it is what the connector announces and what a
+  # member of the instance ends up routing. Letting docker pick would make the
+  # thing being demonstrated change from run to run.
+  default:
+    # Named, because docker's resolver answers <service>.<network> and that is
+    # the domain this connector announces. A generated name carries the project
+    # name and an underscore, which is not a domain.
+    name: robinet-ipv4-net
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
+
+  # The demo hub, from ../hub. Docker isolates bridge networks from each other,
+  # so a connector that has to reach the hub joins its network rather than
+  # routing to it. On a real platform this is the internet and there is no such
+  # line.
+  robinet:
+    name: robinet-demo
+    external: true
+
+services:
+  mysql:
+    image: mysql:latest
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "root"
+      MYSQL_DATABASE: "example"
+      MYSQL_USER: "example"
+      MYSQL_PASSWORD: "example"
+    volumes:
+      - mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  vpn:
+    image: wyga/robinet:1
+    restart: unless-stopped
+
+    # Not started with the rest: the point of the demo is to start it
+    # yourself and watch it ask to be let in. docker compose up -d vpn.
+    profiles: [connector]
+
+    networks:
+      - default
+      - robinet
+    environment:
+      # host/instance/token. The instance is named rather than identified, and
+      # the token is the one ../tenant creates it with, so nothing here has to
+      # be edited. robinet instance show prints this line for a real instance.
+      ROBINET_ENDPOINT: 250.250.250.250/example/demo
+
+      # What the owner sees next to the approval. Without it the request is
+      # named after this container's hostname, which is a hex string.
+      ROBINET_NAME: office
+
+      # Only the compose network. Detection would also find the hub's own
+      # network, which this container is on to reach the api, and announcing
+      # that would offer to carry traffic for the hub itself.
+      ROBINET_ANNOUNCE_ROUTES: 172.31.250.0/24
+      ROBINET_DISABLE_AUTODISCOVER: "1"
+
+      # The names it can answer for. Docker's resolver knows mysql by
+      # <service>.<network>, so a member of the instance types the same thing
+      # somebody inside this network would.
+      ROBINET_DOMAINS: robinet-ipv4-net
+    volumes:
+      # The keypair that is this connector's identity. Without a volume every
+      # restart arrives as a stranger and needs approving again.
+      - vpn:/data
+
+volumes:
+  mysql:
+  vpn:

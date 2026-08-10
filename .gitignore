@@ -1,0 +1,15 @@
+dist/
+.artifacts/
+
+# A variant's configuration carries a hub token. The example is the template;
+# a real one is materialized at build time and never committed.
+variant/*/config.json
+variant/*/config.*.json
+!variant/example/config.json
+
+# Not part of what is published. DEPLOY.md describes one particular hub and the
+# machine it runs on, and WORKING.md is about working with this project's
+# author rather than about the project. Both stay on disk and stay in the
+# routing table in CLAUDE.md.
+doc/DEPLOY.md
+doc/WORKING.md

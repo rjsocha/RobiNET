@@ -1,0 +1,70 @@
+# A tag starting with v builds the binary and the image, and publishes both.
+#
+# The version comes from the tag rather than from the working tree, so what a
+# release calls itself and what it was built from cannot disagree.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Tags, so the build can describe itself.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A release that has not passed the checks is not a release.
+      - name: test
+        run: make test
+
+      - name: build
+        run: make amd64
+        env:
+          VERSION: ${{ github.ref_name }}
+
+      - name: name the artifact after the tag
+        run: |
+          install -D dist/linux/amd64/robinet "artifacts/robinet-${{ github.ref_name }}-linux-amd64"
+          cd artifacts && sha256sum * > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/robinet-${{ github.ref_name }}-linux-amd64
+            artifacts/SHA256SUMS
+          generate_release_notes: true
+
+      # The image is what most people run: a connector inside the network being
+      # exposed. Published only when the secrets for it exist, so a fork
+      # tagging a release does not fail on somebody else's registry.
+      - name: log in to docker hub
+        if: vars.IMAGE_NAME != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: build and push the image
+        if: vars.IMAGE_NAME != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: |
+            ${{ vars.IMAGE_NAME }}:1
+            ${{ vars.IMAGE_NAME }}:${{ github.ref_name }}

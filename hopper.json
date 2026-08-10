@@ -1,0 +1,22 @@
+{
+  "name": "robinet",
+  "release": "{{env "ROBINET_RELEASE"}}",
+  "completion": {
+    "bash": [
+      { "exec": "%{BIN}/robinet completion bash" }
+    ]
+  },
+  "platforms": {
+    "all": {
+      "files": [
+        {"src": "doc/INFO.md", "info": "INFO.md"},
+        {"src": "doc/MANUAL.md", "info": "MANUAL.md"},
+        {"src": "integration/skill.json", "skill-meta": "robinet"},
+        {"src": "integration/skill/SKILL.md", "skill": "robinet/SKILL.md"}
+      ]
+    },
+    "linux/amd64": {
+      "files": [{"src": ".artifacts/robinet-linux-amd64", "binary": "robinet"}]
+    }
+  }
+}
