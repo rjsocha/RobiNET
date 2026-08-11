@@ -59,6 +59,7 @@ that does not belong on a command line. See doc/hub.yaml for an example.`,
 		newHubShowCmd(&configPath, &configDirs),
 		newHubMachinesCmd(&configPath, &configDirs),
 		newHubMembersCmd(&configPath, &configDirs),
+		newHubConfigCmd(&configPath, &configDirs),
 	)
 
 	// On the parent, so every subcommand takes them the same way.

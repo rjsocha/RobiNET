@@ -144,19 +144,24 @@ keeps them. So when nebula fails on something it was told, the only way to know
 what it was told is to reason about the renderer, which is how an afternoon
 goes on a failure that reproduces once in two starts.
 
-`robinet debug config <instance>` prints it. Whole, including `pki.key`: that
-is the caller's own key, in the caller's own state file, over a socket that
-belongs to them, and cutting it out would protect nobody.
+`robinet hub config <instance>` does this for the hub, with the signing key
+left out unless `--show-keys` asks for it. What remains is the tenant's side,
+and it is the harder half.
 
-The instance is an argument rather than an option, in both roles. A tenant runs
-one nebula, one tun and one configuration per instance, and a hub runs one
-lighthouse per instance, so neither has a single answer to give. The hub's
-equivalent belongs next to its other subcommands.
+The instance is an argument rather than an option, in both roles: a tenant runs
+one nebula, one tun and one configuration per instance, so it has no single
+answer to give either.
 
-It should serve what is running, not a fresh render. The runner already holds
-the `*config.C` nebula loaded, and a re-render answers a different question:
-what would be sent if the connection started now. When those two disagree, the
-disagreement is the bug being looked for.
+The reason the tenant's half is harder is that it must serve **what is
+running**, not a fresh render. The runner holds the `*config.C` nebula loaded,
+and a re-render answers a different question - what would be sent if the
+connection started now - and when the two disagree, the disagreement is the bug
+being looked for. The hub gets away with rendering because its configuration is
+a function of instance state and nothing else, and the one thing that changes
+it while running, a ban, changes that state too.
+
+Nothing has to be cut out of the tenant's: it is the caller's own key, in the
+caller's own state file, over a socket that belongs to them.
 
 ## Relay, tested
 
@@ -254,6 +259,28 @@ composes with the encryption above rather than replacing it: encrypted at rest
 protects the copy on disk before it is loaded, and the agent keeps it out of
 the daemon afterwards. What it costs is that admitting anybody then needs an
 agent holding the CA key, which is the point.
+
+There is a third key, and it fits the same mechanism. The **machine identity**
+is ed25519 (`internal/wrak/identity.go`), which is what OpenSSH means by
+`ssh-ed25519`, so it converts to that format without anything being invented
+and could be held by the agent rather than written into the state file as
+`identity`. Then a stolen `tenant.json` is a list of instances and certificates
+and nothing that signs.
+
+It is the harder of the two to move, though, and worth doing after the CA
+rather than before. The identity signs every request the daemon makes, not one
+decision a person is present for, and the daemon is a service: it would need an
+agent socket that exists without a login session, which is a per-user unit and
+a `SSH_AUTH_SOCK` pointing at it. It also reverses something stated as a
+property in `SPEC.md` section 5 - that the agent is needed exactly once, in a
+process that is not root, and the daemon never touches it. That is a fair trade
+for keeping a key off disk, but it is a trade and not a free win.
+
+Neither move reaches an `-sk` key. A hardware-backed ssh key signs over a
+structure of its own, with an application string, flags and a counter, so what
+comes back is not a bare ed25519 signature over the bytes handed in - nebula
+would not verify it and neither would the hub. Plain ed25519 in an agent, yes;
+a YubiKey holding the CA, not this way.
 
 ## Certificate renewal
 

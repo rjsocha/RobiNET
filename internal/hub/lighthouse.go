@@ -21,6 +21,10 @@ import (
 type lighthouse struct {
 	control *nebula.Control
 	log     *slog.Logger
+
+	// cfg is what nebula was started from, kept so the blocklist can be
+	// changed by reloading it rather than by taking the instance down.
+	cfg *config.C
 }
 
 // lighthouseDevice names an instance's tun.
@@ -138,7 +142,7 @@ func startLighthouse(inst *Instance, bind string, dns, noTun bool, log *slog.Log
 
 	control.Start()
 
-	return &lighthouse{control: control, log: l}, nil
+	return &lighthouse{control: control, log: l, cfg: &c}, nil
 }
 
 func (l *lighthouse) stop() {
@@ -181,6 +185,32 @@ func (ls *lighthouses) start(inst *Instance, bind string, log *slog.Logger) erro
 	return nil
 }
 
+// reload hands a running lighthouse a new configuration.
+//
+// A ban changes one thing, pki.blocklist, and nebula reloads that in place. It
+// used to be done by stopping the instance and starting it again, which was
+// free while a lighthouse had no device and stopped being free the moment it
+// got one: the kernel had not released the tun by the time the new nebula
+// asked for it, so the start failed with "device or resource busy" and the
+// instance was left with no lighthouse at all, after the ban had already been
+// recorded.
+func (ls *lighthouses) reload(inst *Instance, bind string, log *slog.Logger) error {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	lh, ok := ls.running[inst.ID]
+	if !ok || lh.cfg == nil {
+		return nil
+	}
+
+	raw, err := lighthouseConfig(inst, bind, ls.dns, ls.noTun)
+	if err != nil {
+		return err
+	}
+
+	return lh.cfg.ReloadConfigString(string(raw))
+}
+
 func (ls *lighthouses) stop(id string) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
@@ -207,4 +237,41 @@ func (ls *lighthouses) isRunning(id string) bool {
 
 	_, ok := ls.running[id]
 	return ok
+}
+
+// RedactedKey stands in for a private key that was left out.
+const RedactedKey = "<redacted, --show-keys>"
+
+// LighthouseConfig renders what nebula is given for one instance.
+//
+// The same bytes the running lighthouse was loaded from, since the
+// configuration is a function of the instance and the hub's own settings and
+// nothing else. A ban is the one thing that changes it while the hub runs, and
+// it changes the state this reads from too, so the two do not drift.
+//
+// The signing key is left out unless asked for. Everything else - the
+// authority, the certificate, the addresses, the ports - is public by nature
+// or already visible to every member.
+func LighthouseConfig(inst *Instance, cfg Config, showKeys bool) ([]byte, error) {
+	raw, err := lighthouseConfig(inst, cfg.NebulaBind, cfg.DNS, cfg.NoLighthouseTun)
+	if err != nil {
+		return nil, err
+	}
+	if showKeys {
+		return raw, nil
+	}
+
+	// Redacted on the rendered tree rather than while rendering, so what is
+	// printed has the shape of the real thing down to the last key.
+	var tree map[string]any
+	if err := yaml.Unmarshal(raw, &tree); err != nil {
+		return nil, err
+	}
+	if pki, ok := tree["pki"].(map[string]any); ok {
+		if _, held := pki["key"]; held {
+			pki["key"] = RedactedKey
+		}
+	}
+
+	return yaml.Marshal(tree)
 }

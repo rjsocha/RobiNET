@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/netip"
 	"os"
 	"sort"
@@ -311,4 +313,61 @@ func prefixOrDash(p netip.Prefix) string {
 		return "-"
 	}
 	return p.String()
+}
+
+// newHubConfigCmd prints the nebula configuration an instance's lighthouse
+// runs on.
+//
+// Because when nebula fails on something it was told, the only other way to
+// know what it was told is to reason about the renderer, which is how an
+// afternoon goes on a failure that reproduces once in two starts.
+func newHubConfigCmd(configPath *string, configDirs *[]string) *cobra.Command {
+	var showKeys bool
+
+	cmd := &cobra.Command{
+		Use:   "config <instance>",
+		Short: "Print the nebula configuration an instance's lighthouse runs on",
+		Long: `config prints what nebula was handed for one instance: its authority, its
+certificate, the addresses it listens on, the blocklist it enforces.
+
+The signing key is left out unless --show-keys says otherwise. Everything else
+here is public by nature or already known to every member of that instance.
+
+One lighthouse per instance, so this takes one: the hub runs several and has no
+single answer to give.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			file, err := hub.LoadFile(*configPath, *configDirs...)
+			if err != nil && !errors.Is(err, hub.ErrNoBinders) {
+				return err
+			}
+
+			cfg, err := file.Config(slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if err != nil {
+				return err
+			}
+
+			store, err := hub.OpenStore(cfg.StatePath)
+			if err != nil {
+				return err
+			}
+
+			inst, err := store.Resolve(args[0])
+			if err != nil {
+				return fmt.Errorf("no instance %s", args[0])
+			}
+
+			raw, err := hub.LighthouseConfig(inst, cfg, showKeys)
+			if err != nil {
+				return err
+			}
+
+			fmt.Print(string(raw))
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&showKeys, "show-keys", false, "print the signing key too")
+
+	return cmd
 }

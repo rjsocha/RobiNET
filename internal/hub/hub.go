@@ -746,7 +746,7 @@ func (h *Hub) Ban(instanceID, ref, note string) error {
 		return err
 	}
 
-	return h.restartLighthouse(instanceID, "banned")
+	return h.applyBlocklist(instanceID)
 }
 
 // Unban lets a banned member back in. Its certificate was never revoked and
@@ -768,25 +768,29 @@ func (h *Hub) Unban(instanceID, ref, note string) error {
 		return err
 	}
 
-	return h.restartLighthouse(instanceID, "unbanned")
+	return h.applyBlocklist(instanceID)
 }
 
-// restartLighthouse rebuilds a running lighthouse after the blocklist changed.
+// applyBlocklist tells a running lighthouse what it must now refuse.
 //
-// The lighthouse holds the blocklist in its own configuration, so it has to be
-// rebuilt before it will stop telling a banned member where anybody is.
-func (h *Hub) restartLighthouse(instanceID, did string) error {
+// The lighthouse holds the blocklist in its own configuration, so the change
+// has to reach it before it will stop telling a banned member where anybody
+// is. Reloaded rather than restarted: nebula reloads pki in place, which is
+// what a SIGHUP does to it and what the connector already does with the same
+// list.
+//
+// The decision is recorded either way. A reload that fails leaves the hub
+// knowing about the ban and one lighthouse not yet enforcing it, which the
+// next start of the hub settles; the error says so rather than suggesting the
+// ban did not happen.
+func (h *Hub) applyBlocklist(instanceID string) error {
 	inst, err := h.store.Get(instanceID)
 	if err != nil {
 		return err
 	}
-	if !h.lhs.isRunning(inst.ID) {
-		return nil
-	}
 
-	h.lhs.stop(inst.ID)
-	if err := h.lhs.start(inst, h.cfg.NebulaBind, h.log); err != nil {
-		return fmt.Errorf("%s, but the lighthouse did not come back: %w", did, err)
+	if err := h.lhs.reload(inst, h.cfg.NebulaBind, h.log); err != nil {
+		return fmt.Errorf("recorded, but the lighthouse did not take the new blocklist: %w", err)
 	}
 
 	return nil
