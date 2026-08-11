@@ -79,9 +79,10 @@ func newHubListCmd(configPath *string, configDirs *[]string) *cobra.Command {
 
 func newHubShowCmd(configPath *string, configDirs *[]string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "show <instance>",
-		Short: "Show one instance: its addressing, its members and what is waiting",
-		Args:  cobra.ExactArgs(1),
+		Use:               "show <instance>",
+		Short:             "Show one instance: its addressing, its members and what is waiting",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeHubInstances(configPath, configDirs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := openHubState(*configPath, *configDirs)
 			if err != nil {
@@ -335,7 +336,8 @@ here is public by nature or already known to every member of that instance.
 
 One lighthouse per instance, so this takes one: the hub runs several and has no
 single answer to give.`,
-		Args: cobra.ExactArgs(1),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeHubInstances(configPath, configDirs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			file, err := hub.LoadFile(*configPath, *configDirs...)
 			if err != nil && !errors.Is(err, hub.ErrNoBinders) {
@@ -370,4 +372,36 @@ single answer to give.`,
 	cmd.Flags().BoolVar(&showKeys, "show-keys", false, "print the signing key too")
 
 	return cmd
+}
+
+// completeHubInstances offers what this hub carries, by name, with its overlay
+// beside it.
+//
+// Read from the state file rather than asked over a socket, because the hub has
+// none: its subcommands are run on the machine the hub runs on, by somebody who
+// can read that file. A failure is silence - completion that reports errors
+// into a shell prompt is worse than completion that offers nothing.
+func completeHubInstances(configPath *string, configDirs *[]string) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+	return func(_ *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+		if len(args) > 0 {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+
+		store, err := openHubState(*configPath, *configDirs)
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+
+		var out []string
+		for _, inst := range store.List() {
+			name := inst.Name
+			if name == "" {
+				name = inst.ID
+			}
+			out = append(out, fmt.Sprintf("%s\t%s, %d members", name, inst.Overlay, inst.MemberCount()))
+		}
+
+		sort.Strings(out)
+		return out, cobra.ShellCompDirectiveNoFileComp
+	}
 }
