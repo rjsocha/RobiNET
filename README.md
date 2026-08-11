@@ -4,15 +4,19 @@ Reach a private network you have no route to - a Railway environment, a docker
 compose network, a subnet behind someone else's NAT - without a public address
 on either side and without a hosted third party in the middle.
 
-Linux only. Early, and honest about it: the enrollment path is covered by tests
-end to end, the tunnel has been brought up by hand, the connector has not been
-run in anger yet.
+Linux only.
+
+**The control plane is distributed.** Each instance carries its own certificate
+authority, and it lives on the machine of whoever created that instance. The
+hub allocates addresses and ports, carries enrollment requests and serves the
+route table, and holds no signing key: it cannot admit anybody and cannot mint
+an identity. Nothing about a mesh is decided anywhere but on its owner's
+machine.
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/robinet-connector)
 
 That deploys a connector into a Railway environment. It needs a hub of your
-own: there is nothing to sign up for, and the button is one end of a mesh
-rather than a product.
+own; there is nothing to sign up for.
 
 ## This is nebula, plus some code around it
 
@@ -42,9 +46,12 @@ What robinet adds is the part nebula deliberately leaves to you:
 - **a user space stack** built on nebula's overlay device and gvisor, so a
   connector runs in a container with no `NET_ADMIN` and no `/dev/net/tun`, and
   still forwards TCP, UDP and DNS into the network it lives in
-
-Everything else - the hard part, the cryptography and the transport - is
-nebula's, and this project would not exist without it.
+- **names**, two kinds. Every member answers to its certificate name,
+  `<member>.<kind>.<instance>.instance`, served by the lighthouse from the
+  handshakes it already sees. A connector additionally carries the zone its own
+  network resolves - `railway.internal`, or the root where names have no suffix
+  at all - under a name space of its own, so two Railway projects that both
+  call their network `railway.internal` stay apart
 
 ## Vocabulary
 
@@ -84,14 +91,14 @@ carries public keys, announced routes, hints and signed certificates - all of
 which are public by nature. A compromised hub can deny service. It cannot mint
 an identity, and it cannot decide who joins.
 
-## Try it
+## Running it
 
 ```
 # on a machine with a public address
 robinet hub init --endpoint 203.0.113.10        # writes /etc/site/robinet/hub.yaml
 sudoedit /etc/site/robinet/binder/me.yaml         # who may create instances, by ssh key
 robinet hub test                                # what that resolves to
-robinet hub install                             # a systemd unit, no capabilities at all
+robinet hub install                             # a systemd unit; CAP_NET_ADMIN for the lighthouse device
 
 # on your machine, as yourself, with your ssh key in the agent
 robinet join --hub https://203.0.113.10:8443 --token <the hub token> --insecure
@@ -99,8 +106,7 @@ robinet setup                                     # elevates itself; runs as you
 robinet instance create --name railway-prod --shared-token shared
 
 # inside the network you want to reach
-robinet connect --endpoint https://203.0.113.10:8443/v1/enroll/<id> \
-  --token shared --state /data
+robinet connect --endpoint 203.0.113.10/railway-prod/shared --state /data
 
 # back on your machine
 robinet status                # the request is waiting
@@ -122,12 +128,13 @@ make variants                    # from variant/<name>/config.json
 robinet.variant.<name> join      # the hub and the token are already in it
 ```
 
-It presets nothing that matters: the ssh key still decides who you are, and the
-owner still decides what you may reach.
+The ssh key still decides who you are, and the owner still decides what you may
+reach.
 
 Every connector flag can be given as an environment variable instead
-(`ROBINET_ENDPOINT`, `ROBINET_TOKEN`, `ROBINET_STATE`), which is
-how it is configured on a platform that offers nothing else.
+(`ROBINET_ENDPOINT`, `ROBINET_NAME`, `ROBINET_STATE`, `ROBINET_DOMAIN`,
+`ROBINET_ANNOUNCE_ROUTES`), which is how it is configured on a platform that
+offers nothing else.
 
 ## What it does not do
 
@@ -137,7 +144,8 @@ how it is configured on a platform that offers nothing else.
 - It does not renew certificates. They are signed once, long lived, and a
   connector whose network changed enrolls again.
 - It does not carry two routes to the same prefix. One route table cannot hold
-  both, so a colliding prefix blocks approval until the holder is banned.
+  both, so a colliding prefix blocks approval until the holder is retired -
+  `member ban`, then `member remove`, which burns its key and certificate.
 - It has no remote panel. Decisions are made on the machine that holds the
   authority, over a unix socket.
 
@@ -145,7 +153,7 @@ how it is configured on a platform that offers nothing else.
 
 ```
 make local     # host only
-make build     # linux/amd64 and linux/arm64 into dist/
+make build     # linux/amd64 into dist/
 make test
 make race
 ```
