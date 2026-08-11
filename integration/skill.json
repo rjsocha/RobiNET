@@ -1,5 +1,6 @@
 {
-  "schema": 1,
+  "schema": 2,
+  "provides": "robinet",
   "description": "Reach a private network from this machine over RobiNET - joining an instance, exposing a network with a connector, admitting members, and name resolution for what they carry.",
   "agents": ["claude", "codex"]
 }
