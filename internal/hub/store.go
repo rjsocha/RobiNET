@@ -77,10 +77,10 @@ type Member struct {
 	// Routes are the prefixes a connector carries. Empty for anyone else.
 	Routes []netip.Prefix `json:"routes,omitempty"`
 
-	// Domains are the names it can resolve. Carried beside the routes rather
-	// than in the certificate, so admitting a connector makes its names work
-	// for everybody without anything being reissued.
-	Domains []string `json:"domains,omitempty"`
+	// Domain is the zone it can resolve. Carried beside the routes rather than
+	// in the certificate, so admitting a connector makes its names work for
+	// everybody without anything being reissued.
+	Domain string `json:"domain,omitempty"`
 
 	CertFingerprint string `json:"cert_fingerprint,omitempty"`
 

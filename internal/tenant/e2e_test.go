@@ -114,7 +114,7 @@ func TestSharedInstance(t *testing.T) {
 	}
 	requestID := postEnroll(t, srv.URL, created.ID, req, req.MAC("shared"))
 
-	entry, err := robert.Approve(ctx, requestID, nil, nil, "")
+	entry, err := robert.Approve(ctx, requestID, nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestSharedInstance(t *testing.T) {
 		t.Fatalf("the request says binder %q, want jacek attested by the hub", pending[0].Record.Binder)
 	}
 
-	if _, err := robert.Approve(ctx, pending[0].Record.ID, nil, nil, ""); err != nil {
+	if _, err := robert.Approve(ctx, pending[0].Record.ID, nil, false, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -373,7 +373,7 @@ func TestAmbiguousMemberName(t *testing.T) {
 			Routes:    []netip.Prefix{netip.MustParsePrefix("10.128.0.0/9")},
 		}
 		requestID := postEnroll(t, srv.URL, created.ID, req, req.MAC("shared"))
-		if _, err := robert.Approve(ctx, requestID, nil, nil, ""); err != nil {
+		if _, err := robert.Approve(ctx, requestID, nil, false, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -453,7 +453,7 @@ func TestSharedTokenRotation(t *testing.T) {
 	}
 	admitted := enroll.Request{PublicKey: string(admittedKey), Name: "already-in"}
 	requestID := postEnroll(t, srv.URL, created.ID, admitted, admitted.MAC("first"))
-	if _, err := robert.Approve(ctx, requestID, nil, nil, ""); err != nil {
+	if _, err := robert.Approve(ctx, requestID, nil, false, ""); err != nil {
 		t.Fatal(err)
 	}
 

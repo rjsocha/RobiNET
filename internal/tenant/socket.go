@@ -36,10 +36,13 @@ type ApproveRequest struct {
 	// it will be known by in DNS.
 	Name string `json:"name,omitempty"`
 
-	// Routes and Domains narrow what is accepted from a connector. Empty means
-	// everything it announced.
-	Routes  []netip.Prefix `json:"routes,omitempty"`
-	Domains []string       `json:"domains,omitempty"`
+	// Routes narrows what is accepted from a connector. Empty means everything
+	// it announced.
+	Routes []netip.Prefix `json:"routes,omitempty"`
+
+	// NoDomain refuses the zone it announced. There is nothing between the two:
+	// a connector answers for the one its own resolver knows, or for nothing.
+	NoDomain bool `json:"no_domain,omitempty"`
 }
 
 // DecisionRequest carries a rejection or a forget.
@@ -629,7 +632,7 @@ func (d *Daemon) handleApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := d.Approve(r.Context(), req.ID, req.Routes, req.Domains, req.Name)
+	entry, err := d.Approve(r.Context(), req.ID, req.Routes, req.NoDomain, req.Name)
 	if err != nil {
 		writeError(w, err)
 		return

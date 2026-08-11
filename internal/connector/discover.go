@@ -105,50 +105,57 @@ func attachedPrefixes() []netip.Prefix {
 	return out
 }
 
-// DiscoverDomains returns the search domains the resolver of this network was
-// configured with, which is what makes a bare service name work inside it.
+// announcedDomain is the one zone the connector tells the owner it resolves.
 //
-// On Railway that is railway.internal, and reusing it is the point: a member of
-// the instance types the same name somebody inside the network would.
-func DiscoverDomains() []string {
-	raw, err := os.ReadFile("/etc/resolv.conf")
-	if err != nil {
-		return nil
+// A network that appends nothing to a name still carries one: a docker compose
+// network answers bare service names, so there is no suffix to claim and the
+// root says exactly that. Announced rather than left empty, because empty means
+// this connector resolves nothing at all, and it does.
+//
+// With DNS forwarding off it resolves nothing, and a name space would be a
+// promise it cannot keep: the owner would admit it, every member's resolver
+// would be pointed at it, and every question would go unanswered.
+func announcedDomain(dns bool, given, detected string) string {
+	switch {
+	case !dns:
+		return ""
+	case given != "":
+		// Said outright, so it replaces what was detected: somebody who names
+		// a zone means that one.
+		return given
+	case detected != "":
+		return detected
+	default:
+		return enroll.RootDomain
+	}
+}
+
+// DiscoverDomain returns the zone the platform this connector runs on resolves
+// names under, or nothing when the platform is unknown.
+//
+// Per platform, and never from /etc/resolv.conf. A search list is whatever
+// somebody configured - docker compose takes dns_search from the compose file -
+// so it says what this container completes bare names with, not what the
+// network around it actually answers for. Claiming a name space from it means
+// claiming wp.pl because a compose file said so.
+//
+// The platform is asked instead, in its own words, and only for what it states
+// outright.
+func DiscoverDomain() string {
+	p, found := detectPlatform()
+	if !found || p.domainVar == "" {
+		return ""
 	}
 
-	seen := map[string]struct{}{}
-	var out []string
-
-	for _, line := range strings.Split(string(raw), "\n") {
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) < 2 {
-			continue
-		}
-		// search takes a list and domain takes one, and both mean the same
-		// thing here: what gets completed onto a bare name in this network.
-		if fields[0] != "search" && fields[0] != "domain" {
-			continue
-		}
-
-		for _, candidate := range fields[1:] {
-			name, err := enroll.ParseDomain(candidate)
-			if err != nil {
-				continue
-			}
-			// A single label is a local search domain, not a zone worth
-			// claiming on somebody else's machine.
-			if !strings.Contains(name, ".") {
-				continue
-			}
-			if _, dup := seen[name]; dup {
-				continue
-			}
-			seen[name] = struct{}{}
-			out = append(out, name)
-		}
+	// The variable holds this deployment's own name, so the zone is read off
+	// the end of it rather than assumed: a platform that changes what it hands
+	// out stops matching instead of announcing something that was never true.
+	value := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(os.Getenv(p.domainVar)), "."))
+	if value != p.domainZone && !strings.HasSuffix(value, "."+p.domainZone) {
+		return ""
 	}
 
-	return out
+	return p.domainZone
 }
 
 // A platform is recognized by an environment variable only it sets, and what
@@ -172,6 +179,13 @@ type platform struct {
 	// runs in one.
 	detect string
 
+	// domainVar is a variable holding this deployment's own name inside the
+	// platform's private network, and domainZone is what that name has to end
+	// with for the zone to be announced. A platform with neither resolves
+	// nothing worth claiming.
+	domainVar  string
+	domainZone string
+
 	// fields maps a normalized hint to the variable that carries it. Same
 	// vocabulary across providers, so the same three lines are read every time.
 	fields map[string]string
@@ -179,9 +193,11 @@ type platform struct {
 
 var platforms = []platform{
 	{
-		name:     "railway",
-		detect:   "RAILWAY_ENVIRONMENT_NAME",
-		dropIPv4: true,
+		name:       "railway",
+		detect:     "RAILWAY_ENVIRONMENT_NAME",
+		dropIPv4:   true,
+		domainVar:  "RAILWAY_PRIVATE_DOMAIN",
+		domainZone: "railway.internal",
 		fields: map[string]string{
 			"project":     "RAILWAY_PROJECT_NAME",
 			"environment": "RAILWAY_ENVIRONMENT_NAME",

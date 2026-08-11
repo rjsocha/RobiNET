@@ -106,6 +106,15 @@ func (c *hubClient) result(ctx context.Context, instance, id string) (*enroll.Re
 	return &res, nil
 }
 
+// refusedBackoff is how long the connector waits before giving up and letting
+// its supervisor try again.
+//
+// A refusal is about the request itself - a bad domain, the wrong shared token,
+// a burned key - so the next attempt will be refused the same way. Returning at
+// once turns "unless-stopped" into a restart loop measured in milliseconds,
+// which buries the one line saying why in its own noise.
+const refusedBackoff = 30 * time.Second
+
 // waitForApproval submits if needed and then polls until there is an answer.
 // A rejection ends the wait: the operator said no, and a restart is how the
 // connector asks again.
@@ -113,7 +122,7 @@ func (c *hubClient) waitForApproval(ctx context.Context, instance string, req en
 	if state.RequestID == "" {
 		id, err := c.submit(ctx, instance, req)
 		if err != nil {
-			return nil, err
+			return nil, c.refused(ctx, err)
 		}
 		if err := state.SaveRequestID(id); err != nil {
 			return nil, err
@@ -139,7 +148,7 @@ func (c *hubClient) waitForApproval(ctx context.Context, instance string, req en
 				return res.Bundle, nil
 
 			case enroll.StatusRejected:
-				return nil, fmt.Errorf("enrollment rejected: %s", res.Reason)
+				return nil, c.refused(ctx, fmt.Errorf("enrollment rejected: %s", res.Reason))
 			}
 
 			if res.RetryAfter > 0 {
@@ -153,6 +162,21 @@ func (c *hubClient) waitForApproval(ctx context.Context, instance string, req en
 		case <-time.After(backoff):
 		}
 	}
+}
+
+// refused holds the error for a while before handing it back, so a supervisor
+// restarting the container does not spin.
+func (c *hubClient) refused(ctx context.Context, err error) error {
+	c.log.Error("enrollment refused, waiting before letting this process exit",
+		"error", err, "wait", refusedBackoff)
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(refusedBackoff):
+	}
+
+	return err
 }
 
 func responseError(resp *http.Response) error {

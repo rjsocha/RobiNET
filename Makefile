@@ -35,18 +35,17 @@ HOPPER_VARIANT ?= internal
 HOPPER_TO      ?=
 ARTIFACTS      := .artifacts
 
-.PHONY: all build local amd64 arm64 variants docker docker-push hopper hopper-channel hopper-stage hopper-file test race vet fmt fmt-check tidy clean hashes version install
+.PHONY: all build local amd64 variants docker docker-push hopper hopper-channel hopper-stage hopper-file test race vet fmt fmt-check tidy clean hashes version install
 
 all: build
 
-# Everything we ship.
-build: amd64 arm64
+# Everything we ship, which is linux/amd64 and nothing else: the hub, the
+# machines it serves and the platforms the connector runs on are all that, and
+# an architecture nobody builds for is an architecture nobody tests.
+build: amd64
 
 amd64:
 	$(GOFLAGS) GOOS=linux GOARCH=amd64 $(GO) build "$(LDFLAGS)" -o $(DIST)/linux/amd64/robinet $(SRC)
-
-arm64:
-	$(GOFLAGS) GOOS=linux GOARCH=arm64 $(GO) build "$(LDFLAGS)" -o $(DIST)/linux/arm64/robinet $(SRC)
 
 # Preconfigured builds for internal distribution: the binary already knows its
 # hub and token, so a person runs one command instead of copying a url and a
@@ -61,12 +60,10 @@ variant-%:
 	  echo "and fill in the hub, the token and whatever note should be shown."; \
 	  exit 1; \
 	}
-	@for arch in amd64 arm64; do \
-	  $(GOFLAGS) GOOS=linux GOARCH=$$arch $(GO) build \
-	    "-ldflags=$(LDBASE) -X $(PKG)/internal/variant.Name=$* -X $(PKG)/internal/variant.Encoded=$$(base64 -w0 variant/$*/config.json)" \
-	    -o $(DIST)/linux/$$arch/robinet.variant.$* $(SRC) || exit 1; \
-	  echo "built $(DIST)/linux/$$arch/robinet.variant.$*"; \
-	done
+	@$(GOFLAGS) GOOS=linux GOARCH=amd64 $(GO) build \
+	  "-ldflags=$(LDBASE) -X $(PKG)/internal/variant.Name=$* -X $(PKG)/internal/variant.Encoded=$$(base64 -w0 variant/$*/config.json)" \
+	  -o $(DIST)/linux/amd64/robinet.variant.$* $(SRC)
+	@echo "built $(DIST)/linux/amd64/robinet.variant.$*"
 
 # ----- connector image --------------------------------------------------
 

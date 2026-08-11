@@ -492,7 +492,7 @@ func (h *Hub) Decide(instanceID, requestID string, d enroll.Decision) error {
 				Address:         record.OverlayAddress,
 				Address6:        record.OverlayAddress6,
 				Routes:          d.Routes,
-				Domains:         d.Domains,
+				Domain:          d.Domain,
 				CertFingerprint: d.CertFingerprint,
 				JoinedAt:        time.Now().UTC(),
 			}
@@ -618,17 +618,19 @@ func resolversOf(inst *Instance) []Resolver {
 		if m.Kind != KindConnector || m.Banned() {
 			continue
 		}
-		for _, domain := range m.Domains {
-			r := Resolver{
-				Domain:    domain,
-				Via:       m.Address.Addr(),
-				Connector: m.Name,
-			}
-			if m.Address6.IsValid() {
-				r.Via6 = m.Address6.Addr()
-			}
-			out = append(out, r)
+		if m.Domain == "" {
+			continue
 		}
+
+		r := Resolver{
+			Domain:    m.Domain,
+			Via:       m.Address.Addr(),
+			Connector: m.Name,
+		}
+		if m.Address6.IsValid() {
+			r.Via6 = m.Address6.Addr()
+		}
+		out = append(out, r)
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Domain < out[j].Domain })

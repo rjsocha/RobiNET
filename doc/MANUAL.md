@@ -96,6 +96,7 @@ stops being able to enroll anything new.
 | `ROBINET_STATE` | state directory; **must** be persistent |
 | `ROBINET_NAME` | label shown to whoever approves |
 | `ROBINET_ANNOUNCE_ROUTES` | prefixes to announce, comma separated |
+| `ROBINET_DOMAIN` | the one zone this connector resolves. Replaces what the platform would say rather than joining it. `.` means its network appends nothing to a name |
 | `ROBINET_DISABLE_AUTODISCOVER` | set to stop detecting attached networks |
 | `ROBINET_MTU` | override the computed stack mtu |
 | `ROBINET_DNS` | forward DNS to the container's resolver, on by default |
@@ -181,7 +182,7 @@ waiting for a decision
 | `robinet member unban <name> --note "..."` | takes it off every blocklist and puts its routes back; nothing is reissued |
 | `robinet member remove <name>` | forgets a banned member and frees its name and address, burning its key and its certificate for good; refused for one that is not banned |
 | `robinet member ban <name> --instance <instance>` | settles which one is meant; a name is unique inside an instance and nowhere else, so `ban`, `unban` and `remove` refuse a name held in two of them rather than guessing |
-| `robinet member approve <id> --domains a.example` | admits it, accepting only these of the names it announced |
+| `robinet member approve <id> --no-domain` | admits it and refuses the zone it announced: it carries routes and no names. There is nothing between the two, since it answers for the zone its own resolver knows or for none |
 | `robinet instance delete <name> --force` | removes it from the hub and its authority from here, for good |
 | `robinet instance token <name>` | replaces the shared token; running connectors are unaffected, endpoints handed out before it stop enrolling |
 | `robinet inbound open` | lets members of an instance reach ports on this machine; the default is ping |
@@ -219,6 +220,8 @@ change no certificate.
 | `<name> is not banned: ban it first` | `remove` frees an address the member still holds a valid certificate for | `robinet member ban <name> --note "..."`, then remove |
 | `<name> is a member of <a> and <b>: say which with --instance` | a name is unique inside an instance and nowhere else | add `--instance <name>`, or use the fingerprint instead |
 | `this key was removed from <instance> and will not be admitted again` | a removed connector is enrolling with the key that was burned when it was removed | give it a new keypair, which for a container means a fresh state volume |
+| `enrollment refused, waiting before letting this process exit` | the hub turned the request away, and it will turn the next one away the same way | read the error beside it; the connector waits 30s before exiting so a supervisor restarting it does not bury the reason |
+| `ROBINET_DOMAIN: domain ... is not a letter, digit or hyphen` | the variable holds something that is not one zone | one zone, or `.` for a network that appends nothing; refused before anything reaches the hub |
 | `the daemon is running <x> and this command is <y>` | the binary was upgraded, the service still runs the old one | `robinet restart` |
 | `robinet is not configured: ROBINET_ENDPOINT is still CHANGEME` | a template was deployed without being edited | set it to what `robinet instance show` printed |
 | `cannot carry <prefix>: this instance has no address of that family` | the hub has no IPv6 pool, so no certificate can hold an IPv6 route | set `overlays6` on the hub and create a new instance |
@@ -243,8 +246,17 @@ again, which needs approval again.
 **A connector that asked to be called something impossible is not turned
 away.** A name has to work as a domain name; one that cannot is dropped and
 kept as a hint, so the owner sees what was meant and can approve it under a
-name of their own with `member approve --name`. Failing that, the connector is
-named after its key, and `robinet dns alias` gives it something readable here.
+name of their own with `member approve --name`.
+
+**A connector that asked for nothing is named from what it said about itself**,
+in this order: the platform's environment and project, as `<environment>.<project>`;
+then its service, project or hostname, whichever first reads as a label; and
+failing all of that, its kind and the first eight characters of its key. In a
+container the hostname is the short container id, so a compose connector with
+no `ROBINET_NAME` becomes something like `7a2f93195965`. `member pending` shows
+the result as `WILL BE CALLED` before any decision, and it is worth overriding:
+`docker compose down` and up again is a new container with a new id, while the
+member keeps the name it was admitted under.
 
 **Every member is also `<member>.<kind>.<instance>.instance`.** That is the name
 its certificate was issued to, and the lighthouse answers for it: every member
@@ -258,10 +270,27 @@ admitted first.
 daemon's own resolver, which forwards it to the lighthouse. The hub decides
 whether to answer at all, with `dns` in its configuration.
 
+**A connector always announces a name space**, and four things decide which,
+in this order:
+
+1. `ROBINET_DNS=0` announces none at all, since nothing here would answer them.
+2. `ROBINET_DOMAIN` is taken as given, and replaces anything detected rather
+   than joining it. One zone: a connector answers under one name space, so a
+   second could only be recorded and never asked. A value that is not a domain
+   is refused by the connector at startup, before anything reaches the hub.
+3. Otherwise the platform is asked. Railway states this deployment's own name
+   in `RAILWAY_PRIVATE_DOMAIN`, and the zone is read off the end of it, so
+   `nginx.railway.internal` announces `railway.internal`.
+4. Failing all of that, `.` - the root, which is the network saying it appends
+   nothing to a name. `db.<connector>.<instance>.robinet` is then asked over
+   there as `db`, which is exactly what a docker compose network answers, so
+   two compose projects that both call a service `db` stay apart the same way
+   two Railway projects do, with nothing configured.
+
 **Every name is `<something>.<connector>.<instance>.robinet`.** A connector
-announces the domain its own resolver knows - `railway.internal`, a compose
-network's name - and the daemon answers under a name space of its own instead,
-built from the connector's name and the instance's. So two Railway projects,
+announces one zone - `railway.internal`, or `.` where names carry no suffix -
+and the daemon answers under a name space of its own instead, built from the
+connector's name and the instance's. So two Railway projects,
 which both call their network `railway.internal`, are two different name spaces
 here and both are reachable. `robinet dns install` writes that, and it is not
 automatic: it changes how names resolve on this machine. Run it again after

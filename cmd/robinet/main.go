@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/rjsocha/robinet/internal/variant"
@@ -136,8 +137,13 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
+// envBool reads a switch from the environment.
+//
+// Unset is the default, a short list of words is off, and anything else is on.
+// Folded and trimmed, because these are typed into a platform's web form and a
+// deployment that reads OFF as on is a failure nobody would look for.
 func envBool(name string, fallback bool) bool {
-	switch os.Getenv(name) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
 	case "":
 		return fallback
 	case "0", "false", "no", "off":

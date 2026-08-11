@@ -915,11 +915,11 @@ type PendingEntry struct {
 	WillBeCalled string `json:"will_be_called,omitempty"`
 
 	// Routes and Dropped are filled in by Approve: what the certificate ended
-	// up carrying, and what the authority could not carry. Domains is what it
+	// up carrying, and what the authority could not carry. Domain is what it
 	// will answer for, which is not in the certificate at all.
 	Routes  []netip.Prefix `json:"routes,omitempty"`
 	Dropped []netip.Prefix `json:"dropped,omitempty"`
-	Domains []string       `json:"domains,omitempty"`
+	Domain  string         `json:"domain,omitempty"`
 }
 
 // Pending is everything waiting across the instances this machine owns.
@@ -953,7 +953,7 @@ func (d *Daemon) Pending(ctx context.Context) ([]PendingEntry, error) {
 }
 
 // Approve signs a certificate for a pending request.
-func (d *Daemon) Approve(ctx context.Context, requestID string, routes []netip.Prefix, domains []string, wanted string) (*PendingEntry, error) {
+func (d *Daemon) Approve(ctx context.Context, requestID string, routes []netip.Prefix, noDomain bool, wanted string) (*PendingEntry, error) {
 	entry, err := d.findPending(ctx, requestID)
 	if err != nil {
 		return nil, err
@@ -966,17 +966,24 @@ func (d *Daemon) Approve(ctx context.Context, requestID string, routes []netip.P
 
 	record := entry.Record
 	asked := routes != nil
+
+	// What the connector announced, unless this refuses it. There is nothing
+	// to narrow: a connector answers for one zone, the one its own resolver
+	// knows, so naming a different one here would only name something nothing
+	// over there can answer.
+	domain := record.Request.Domain
+
 	if record.Kind == hub.KindTenant {
 		// A tenant consumes routes and names, it never offers them.
 		routes = nil
-		domains = nil
+		domain = ""
 		asked = false
 	} else {
 		if !asked {
 			routes = record.Request.Routes
 		}
-		if domains == nil {
-			domains = record.Request.Domains
+		if noDomain {
+			domain = ""
 		}
 	}
 
@@ -1029,7 +1036,7 @@ func (d *Daemon) Approve(ctx context.Context, requestID string, routes []netip.P
 		Status:          enroll.StatusApproved,
 		Name:            name,
 		Routes:          routes,
-		Domains:         domains,
+		Domain:          domain,
 		CertFingerprint: fingerprint,
 		Bundle: &enroll.Bundle{
 			Certificate: string(certPEM),
@@ -1043,7 +1050,7 @@ func (d *Daemon) Approve(ctx context.Context, requestID string, routes []netip.P
 
 	entry.Routes = routes
 	entry.Dropped = dropped
-	entry.Domains = domains
+	entry.Domain = domain
 
 	if len(dropped) > 0 {
 		d.log.Warn("dropped routes this instance cannot carry",

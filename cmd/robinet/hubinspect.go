@@ -108,7 +108,7 @@ func newHubShowCmd(configPath *string, configDirs *[]string) *cobra.Command {
 			if len(inst.Members) > 0 {
 				fmt.Println("\nmembers")
 				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(w, "  KIND\tNAME\tADDRESS\tADDRESS6\tROUTES\tDOMAINS\tSTATE\tJOINED")
+				fmt.Fprintln(w, "  KIND\tNAME\tADDRESS\tADDRESS6\tROUTES\tDOMAIN\tSTATE\tJOINED")
 				for _, m := range sortedMembers(inst) {
 					state := "ok"
 					if m.Banned() {
@@ -116,7 +116,7 @@ func newHubShowCmd(configPath *string, configDirs *[]string) *cobra.Command {
 					}
 					fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 						m.Kind, dashIfEmpty(m.Name), addrOrDash(m.Address), prefixOrDash(m.Address6),
-						prefixes(m.Routes), dashIfEmpty(strings.Join(m.Domains, ",")),
+						prefixes(m.Routes), dashIfEmpty(m.Domain),
 						state, m.JoinedAt.Local().Format("2006-01-02 15:04"))
 				}
 				w.Flush()
@@ -237,7 +237,7 @@ func newHubMembersCmd(configPath *string, configDirs *[]string) *cobra.Command {
 			sort.Slice(instances, func(i, j int) bool { return instances[i].Name < instances[j].Name })
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "INSTANCE\tKIND\tNAME\tADDRESS\tADDRESS6\tROUTES\tDOMAINS\tSTATE")
+			fmt.Fprintln(w, "INSTANCE\tKIND\tNAME\tADDRESS\tADDRESS6\tROUTES\tDOMAIN\tSTATE")
 
 			rows := 0
 			for _, inst := range instances {
@@ -254,7 +254,7 @@ func newHubMembersCmd(configPath *string, configDirs *[]string) *cobra.Command {
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 						inst.Name, m.Kind, dashIfEmpty(m.Name),
 						addrOrDash(m.Address), prefixOrDash(m.Address6),
-						prefixes(m.Routes), dashIfEmpty(strings.Join(m.Domains, ",")), state)
+						prefixes(m.Routes), dashIfEmpty(m.Domain), state)
 					rows++
 				}
 			}

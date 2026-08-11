@@ -19,7 +19,7 @@ func newConnectCmd() *cobra.Command {
 		token      string
 		name       string
 		routes     []string
-		domains    []string
+		domain     string
 		noDiscover bool
 		stateDir   string
 		mtu        uint32
@@ -82,7 +82,7 @@ otherwise this connector comes back as a new identity each time.`,
 				SharedToken:         token,
 				Name:                name,
 				Routes:              announced,
-				Domains:             domains,
+				Domain:              domain,
 				DisableAutodiscover: noDiscover,
 				StateDir:            stateDir,
 				MTU:                 mtu,
@@ -100,7 +100,7 @@ otherwise this connector comes back as a new identity each time.`,
 	f.StringVar(&token, "token", envOr("ROBINET_TOKEN", ""), "shared token to sign the enrollment with [ROBINET_TOKEN]")
 	f.StringVar(&name, "name", envOr("ROBINET_NAME", ""), "label shown to whoever approves this [ROBINET_NAME]")
 	f.StringSliceVar(&routes, "announce-routes", envList("ROBINET_ANNOUNCE_ROUTES"), "prefixes to announce [ROBINET_ANNOUNCE_ROUTES]")
-	f.StringSliceVar(&domains, "domains", envList("ROBINET_DOMAINS"), "domains this connector can resolve [ROBINET_DOMAINS]")
+	f.StringVar(&domain, "domain", envOr("ROBINET_DOMAIN", ""), "the zone this connector resolves, or . for a network that appends nothing [ROBINET_DOMAIN]")
 	f.BoolVar(&noDiscover, "disable-autodiscover", envBool("ROBINET_DISABLE_AUTODISCOVER", false), "do not detect attached networks [ROBINET_DISABLE_AUTODISCOVER]")
 	f.StringVar(&stateDir, "state", envOr("ROBINET_STATE", "/var/lib/robinet"), "state directory, must survive restarts [ROBINET_STATE]")
 	f.Uint32Var(&mtu, "mtu", uint32(envUint("ROBINET_MTU", 0)), "override the stack mtu [ROBINET_MTU]")

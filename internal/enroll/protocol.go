@@ -50,10 +50,14 @@ type Request struct {
 	// Routes are the prefixes this connector offers to carry traffic for.
 	Routes []netip.Prefix `json:"routes,omitempty"`
 
-	// Domains are the names it can resolve, using the resolver of the network
-	// it sits in. A prefix says where to send packets; this says what to call
-	// the things there, which is what anybody actually types.
-	Domains []string `json:"domains,omitempty"`
+	// Domain is the zone it can resolve, using the resolver of the network it
+	// sits in. A prefix says where to send packets; this says what to call the
+	// things there, which is what anybody actually types.
+	//
+	// One, not a list. A connector answers under one name space -
+	// <connector>.<instance>.robinet - and two zones cannot share it, so a
+	// second one could only ever be recorded and never asked.
+	Domain string `json:"domain,omitempty"`
 
 	// Hints help a human recognize the request. Environment variables of a
 	// known provider, the hostname, whatever the connector could detect. Purely
@@ -77,9 +81,7 @@ func (r *Request) Canonical() []byte {
 	slices.Sort(routes)
 	b.WriteString("routes=" + strings.Join(routes, ",") + "\n")
 
-	domains := append([]string(nil), r.Domains...)
-	slices.Sort(domains)
-	b.WriteString("domains=" + strings.Join(domains, ",") + "\n")
+	b.WriteString("domain=" + r.Domain + "\n")
 
 	keys := make([]string, 0, len(r.Hints))
 	for k := range r.Hints {
@@ -129,21 +131,26 @@ func (r *Request) Validate() error {
 			return fmt.Errorf("route %s has bits set outside the prefix", p)
 		}
 	}
-	if len(r.Domains) > 32 {
-		return fmt.Errorf("too many domains: %d", len(r.Domains))
-	}
-	for i, d := range r.Domains {
-		name, err := ParseDomain(d)
+	if r.Domain != "" {
+		name, err := ParseDomain(r.Domain)
 		if err != nil {
 			return err
 		}
-		r.Domains[i] = name
+		r.Domain = name
 	}
 	if len(r.Hints) > 64 {
 		return fmt.Errorf("too many hints: %d", len(r.Hints))
 	}
 	return nil
 }
+
+// RootDomain is a connector announcing that names in its network carry no
+// suffix: what is asked there is asked as a single label.
+//
+// The root is a real name rather than a token invented for this, which is why
+// it can sit in a list of domains without weakening what that list is checked
+// against.
+const RootDomain = "."
 
 // ParseDomain checks a domain and returns it in the form it is stored and
 // compared in: lower case, no trailing dot.
@@ -153,6 +160,17 @@ func (r *Request) Validate() error {
 // to arrive.
 func ParseDomain(raw string) (string, error) {
 	name := strings.ToLower(strings.TrimSpace(raw))
+
+	// The root, which is how a connector says its network has no suffix at
+	// all: docker compose resolves bare service names and appends nothing, so
+	// there is no domain to claim and nothing to rewrite onto.
+	//
+	// Checked before the trailing dot is trimmed, since trimming is what turns
+	// this into the empty string refused below.
+	if name == RootDomain {
+		return RootDomain, nil
+	}
+
 	name = strings.TrimSuffix(name, ".")
 
 	if name == "" {
@@ -269,12 +287,12 @@ type Decision struct {
 	// in a name space people type.
 	Name string `json:"name,omitempty"`
 
-	// Routes and Domains are what was granted, which is not always what was
+	// Routes and Domain are what was granted, which is not always what was
 	// asked for: an owner may narrow either, and a route of a family the
 	// certificate cannot hold is dropped. The hub records these rather than
 	// the request, so the route table says what is true.
-	Routes  []netip.Prefix `json:"routes,omitempty"`
-	Domains []string       `json:"domains,omitempty"`
+	Routes []netip.Prefix `json:"routes,omitempty"`
+	Domain string         `json:"domain,omitempty"`
 
 	// CertFingerprint identifies the certificate that was issued, which is
 	// what a blocklist takes. The hub records it so a ban can be applied

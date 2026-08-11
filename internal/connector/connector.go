@@ -38,8 +38,9 @@ type Config struct {
 	// Routes to announce on top of, or instead of, what we detect.
 	Routes []netip.Prefix
 
-	// Domains to announce on top of, or instead of, what we detect.
-	Domains []string
+	// Domain to announce instead of what we detect. One zone, because one name
+	// space answers for one zone.
+	Domain string
 
 	// DisableAutodiscover stops route and domain detection, leaving only what
 	// was given.
@@ -74,6 +75,18 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("the hub url and the instance are required")
 	}
 
+	// Checked here rather than left to the hub. The hub checks it too, and has
+	// to, but a typo in an environment variable answered by a rejected
+	// enrollment is a container asking a server whether its own configuration
+	// parses.
+	if cfg.Domain != "" {
+		name, err := enroll.ParseDomain(cfg.Domain)
+		if err != nil {
+			return fmt.Errorf("ROBINET_DOMAIN: %w, and it takes one zone, or . for a network that appends nothing to a name", err)
+		}
+		cfg.Domain = name
+	}
+
 	state, err := LoadState(cfg.StateDir)
 	if err != nil {
 		return err
@@ -90,33 +103,45 @@ func Run(ctx context.Context, cfg Config) error {
 	)
 	warnIfEphemeral(cfg.StateDir, log)
 
-	given, givenDomains := cfg.Routes, cfg.Domains
+	given, givenDomain := cfg.Routes, cfg.Domain
 
 	routes := given
-	domains := givenDomains
 	var found []netip.Prefix
-	var foundDomains []string
+	var foundDomain string
 
 	if !cfg.DisableAutodiscover {
 		found = DiscoverRoutes()
-		foundDomains = DiscoverDomains()
+		foundDomain = DiscoverDomain()
 		routes = append(routes, found...)
-		domains = append(domains, foundDomains...)
 	}
 	routes = dedupe(routes)
-	domains = dedupeStrings(domains)
+
+	// Routes are collected from everywhere and added up; the zone is not. One
+	// name space answers for one zone, so the sources are ranked rather than
+	// joined.
+	domain := announcedDomain(cfg.DNS, givenDomain, foundDomain)
+
+	if !cfg.DNS && (givenDomain != "" || foundDomain != "") {
+		log.Warn("announcing no domain because dns forwarding is off",
+			"dropped", strings.TrimSpace(givenDomain+" "+foundDomain))
+	}
 
 	// What this connector decided about the network it sits in, before it says
 	// any of it to anybody. Nothing here is a secret - the owner sees the same
 	// thing when deciding - and it is the only place the reasoning is visible:
 	// what was configured, what was detected, and what the two came to.
-	describeNetwork(log, cfg, given, found, givenDomains, foundDomains)
+	describeNetwork(log, cfg, given, found, givenDomain, foundDomain)
+
+	// And what it came to, every start rather than only the one that enrolls:
+	// a connector already admitted still says what it stands for, so "which
+	// zone is this one answering under" is read rather than deduced.
+	log.Info("announcing", "routes", prefixList(routes), "domain", orNone(domain))
 
 	if state.Bundle == nil {
 		req := enroll.Request{
 			PublicKey: string(state.PublicKeyPEM),
 			Name:      cfg.Name,
-			Domains:   domains,
+			Domain:    domain,
 			Routes:    routes,
 			Hints:     DiscoverHints(),
 		}
@@ -129,7 +154,7 @@ func Run(ctx context.Context, cfg Config) error {
 			"instance", cfg.Instance,
 			"name", cfg.Name,
 			"routes", prefixList(routes),
-			"domains", strings.Join(domains, ","),
+			"domain", domain,
 			"authenticated", cfg.SharedToken != "",
 		)
 		for _, k := range sortedKeys(req.Hints) {
@@ -361,7 +386,7 @@ func watchBlocklist(ctx context.Context, cfg Config, state *State, c *config.C, 
 // Two questions get asked of a connector carrying the wrong thing: what did it
 // find, and what was it told. Answering both here means neither has to be
 // guessed at from outside, where there is no interface to look at.
-func describeNetwork(log *slog.Logger, cfg Config, given, found []netip.Prefix, givenDomains, foundDomains []string) {
+func describeNetwork(log *slog.Logger, cfg Config, given, found []netip.Prefix, givenDomain, foundDomain string) {
 	if platform, ok := detectPlatform(); ok {
 		log.Info("recognized where this is running",
 			"platform", platform.name,
@@ -372,8 +397,8 @@ func describeNetwork(log *slog.Logger, cfg Config, given, found []netip.Prefix, 
 	if len(given) > 0 {
 		log.Info("told to carry", "routes", prefixList(given))
 	}
-	if len(givenDomains) > 0 {
-		log.Info("told to resolve", "domains", strings.Join(givenDomains, ","))
+	if givenDomain != "" {
+		log.Info("told to resolve", "domain", givenDomain)
 	}
 
 	if cfg.DisableAutodiscover {
@@ -384,7 +409,15 @@ func describeNetwork(log *slog.Logger, cfg Config, given, found []netip.Prefix, 
 	// Every prefix on every interface, before the platform filter, so a
 	// dropped one is visible as dropped rather than as absent.
 	log.Info("attached to", "prefixes", prefixList(attachedPrefixes()))
-	log.Info("detected", "routes", prefixList(found), "domains", strings.Join(foundDomains, ","))
+	log.Info("detected", "routes", prefixList(found), "domain", orNone(foundDomain))
+}
+
+// orNone renders an empty zone as something a log line can show.
+func orNone(domain string) string {
+	if domain == "" {
+		return "none"
+	}
+	return domain
 }
 
 // prefixList renders prefixes for a log line.

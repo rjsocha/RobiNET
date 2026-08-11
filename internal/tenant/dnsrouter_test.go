@@ -250,3 +250,56 @@ func TestLighthouseNamesAreRoutedToTheLighthouse(t *testing.T) {
 		t.Fatalf("families are v4=%v v6=%v", route.IPv4, route.IPv6)
 	}
 }
+
+// A docker compose network resolves bare service names and appends nothing, so
+// a connector there announces the root and the router takes the name space off
+// without putting anything back.
+func TestBareNamesAreAskedWithoutASuffix(t *testing.T) {
+	table := &hub.RouteTable{
+		Instance: "socha",
+		Routes: []hub.Route{
+			{Prefix: netip.MustParsePrefix("172.20.1.0/24"), Via: netip.MustParseAddr("198.19.128.254"), Connector: "abc"},
+			{Prefix: netip.MustParsePrefix("172.21.0.0/24"), Via: netip.MustParseAddr("198.19.128.253"), Connector: "klop"},
+		},
+		Resolvers: []hub.Resolver{
+			{Domain: ".", Via: netip.MustParseAddr("198.19.128.254"), Connector: "abc"},
+			{Domain: ".", Via: netip.MustParseAddr("198.19.128.253"), Connector: "klop"},
+		},
+	}
+
+	rt := routerTableFor(table, "socha")
+
+	// Two compose projects, both with a service called db, both reachable. The
+	// connector's own label is what tells them apart.
+	for _, tc := range []struct{ ask, via string }{
+		{"db.abc.socha.robinet", "198.19.128.254"},
+		{"db.klop.socha.robinet", "198.19.128.253"},
+	} {
+		route, ok := rt.match(tc.ask)
+		if !ok {
+			t.Fatalf("%s does not resolve", tc.ask)
+		}
+		if route.Via.String() != tc.via {
+			t.Fatalf("%s goes to %s, want %s", tc.ask, route.Via, tc.via)
+		}
+		if !route.bare() {
+			t.Fatalf("%s was not taken as a bare name space, real is %q", tc.ask, route.Real)
+		}
+
+		// Out as a single label, which is the whole of what that network
+		// understands, and back under the name that was asked about.
+		if got := route.rewrite(tc.ask + "."); got != "db." {
+			t.Fatalf("%s went out as %q", tc.ask, got)
+		}
+		if got := route.restore("db."); got != tc.ask+"." {
+			t.Fatalf("the answer came back as %q", got)
+		}
+	}
+
+	// A name the connector's resolver returned from somewhere else keeps its
+	// own shape: rewriting it would be a lie.
+	route, _ := rt.match("db.abc.socha.robinet")
+	if got := route.restore("something.example.com."); got != "something.example.com." {
+		t.Fatalf("a foreign name was rewritten to %q", got)
+	}
+}

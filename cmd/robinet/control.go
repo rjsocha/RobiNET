@@ -584,10 +584,10 @@ func newRestartCmd() *cobra.Command {
 
 func newApproveCmd() *cobra.Command {
 	var (
-		socket  string
-		only    []string
-		domains []string
-		name    string
+		socket   string
+		only     []string
+		noDomain bool
+		name     string
 	)
 
 	cmd := &cobra.Command{
@@ -601,7 +601,7 @@ func newApproveCmd() *cobra.Command {
 				return err
 			}
 
-			req := tenant.ApproveRequest{ID: args[0], Domains: domains, Name: name}
+			req := tenant.ApproveRequest{ID: args[0], NoDomain: noDomain, Name: name}
 			for _, raw := range only {
 				p, err := netip.ParsePrefix(strings.TrimSpace(raw))
 				if err != nil {
@@ -627,8 +627,8 @@ func newApproveCmd() *cobra.Command {
 			if len(entry.Routes) > 0 {
 				fmt.Printf("carrying %s\n", prefixes(entry.Routes))
 			}
-			if len(entry.Domains) > 0 {
-				fmt.Printf("resolving %s\n", strings.Join(entry.Domains, ","))
+			if entry.Domain != "" {
+				fmt.Printf("resolving %s\n", entry.Domain)
 			}
 			for _, d := range entry.Dropped {
 				fmt.Printf("not carrying %s: this instance has no address of that family\n", d)
@@ -639,7 +639,7 @@ func newApproveCmd() *cobra.Command {
 
 	addSocketFlag(cmd, &socket)
 	cmd.Flags().StringSliceVar(&only, "routes", nil, "prefixes to accept from a connector, defaults to everything announced")
-	cmd.Flags().StringSliceVar(&domains, "domains", nil, "domains to accept from a connector, defaults to everything announced")
+	cmd.Flags().BoolVar(&noDomain, "no-domain", false, "refuse the zone it announced; it carries routes and no names")
 	cmd.Flags().StringVar(&name, "name", "", "what to call it, which is also its name in DNS")
 
 	return cmd
@@ -881,8 +881,8 @@ func describe(p tenant.PendingEntry) {
 		fmt.Printf("    address6     %s\n", p.Record.OverlayAddress6)
 	}
 	fmt.Printf("    routes       %s\n", prefixes(p.Record.Request.Routes))
-	if len(p.Record.Request.Domains) > 0 {
-		fmt.Printf("    domains      %s\n", strings.Join(p.Record.Request.Domains, ","))
+	if p.Record.Request.Domain != "" {
+		fmt.Printf("    domain       %s\n", p.Record.Request.Domain)
 	}
 	fmt.Printf("    from         %s\n", p.Record.SourceAddr)
 	fmt.Printf("    key          %s\n", short(p.Record.Fingerprint, 16))

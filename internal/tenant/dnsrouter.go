@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rjsocha/robinet/internal/enroll"
 	"github.com/rjsocha/robinet/internal/hub"
 	"golang.org/x/net/dns/dnsmessage"
 )
@@ -68,20 +69,43 @@ func (t routerTable) match(name string) (routerRoute, bool) {
 	return best, found
 }
 
+// bare is a network whose names carry no suffix, so there is nothing to
+// rewrite onto: what is left after the name space is taken off is the whole
+// question. A docker compose network is the case.
+func (r routerRoute) bare() bool { return r.Real == enroll.RootDomain }
+
 // rewrite turns a question into what the connector's resolver will recognize.
 func (r routerRoute) rewrite(name string) string {
 	trimmed := strings.TrimSuffix(strings.ToLower(name), ".")
 
 	if trimmed == r.Virtual {
-		return r.Real + "."
+		// The name space itself, with nothing in front of it. There is no
+		// name to ask about, and the root is what that is.
+		return enroll.RootDomain
 	}
-	return strings.TrimSuffix(trimmed, "."+r.Virtual) + "." + r.Real + "."
+
+	asked := strings.TrimSuffix(trimmed, "."+r.Virtual)
+	if r.bare() {
+		return asked + "."
+	}
+	return asked + "." + r.Real + "."
 }
 
 // restore turns a name in an answer back into what was asked about, so nothing
 // downstream ever sees the platform's own name space.
 func (r routerRoute) restore(name string) string {
 	trimmed := strings.TrimSuffix(strings.ToLower(name), ".")
+
+	// Nothing was appended on the way out, so nothing is taken off on the way
+	// back: a single label is a name in that network and belongs under this
+	// name space. Anything already carrying a suffix came from somewhere else
+	// and is left alone below.
+	if r.bare() {
+		if trimmed != "" && !strings.Contains(trimmed, ".") {
+			return trimmed + "." + r.Virtual + "."
+		}
+		return name
+	}
 
 	if trimmed == r.Real {
 		return r.Virtual + "."
@@ -127,10 +151,17 @@ func routerTableFor(table *hub.RouteTable, instance string) routerTable {
 			connector = strings.ReplaceAll(connector, ":", "-")
 		}
 
+		// The root keeps its dot. Trimming it the way every other domain is
+		// trimmed would leave the empty string, which is not a name at all.
+		real := strings.ToLower(strings.TrimSpace(r.Domain))
+		if real != enroll.RootDomain {
+			real = strings.TrimSuffix(real, ".")
+		}
+
 		c := carries[r.Via]
 		out.routes = append(out.routes, routerRoute{
 			Virtual: strings.ToLower(fmt.Sprintf("%s.%s.%s", connector, instance, Suffix)),
-			Real:    strings.ToLower(strings.TrimSuffix(r.Domain, ".")),
+			Real:    real,
 			Via:     r.Via,
 			IPv4:    c.v4,
 			IPv6:    c.v6,

@@ -210,9 +210,9 @@ func newMemberListCmd() *cobra.Command {
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			if dual {
-				fmt.Fprintln(w, header+"KIND\tNAME\tBINDER\tADDRESS\tADDRESS6\tROUTES\tDOMAINS\tSTATE")
+				fmt.Fprintln(w, header+"KIND\tNAME\tBINDER\tADDRESS\tADDRESS6\tROUTES\tDOMAIN\tSTATE")
 			} else {
-				fmt.Fprintln(w, header+"KIND\tNAME\tBINDER\tADDRESS\tROUTES\tDOMAINS\tSTATE")
+				fmt.Fprintln(w, header+"KIND\tNAME\tBINDER\tADDRESS\tROUTES\tDOMAIN\tSTATE")
 			}
 
 			for _, m := range members {
@@ -226,14 +226,14 @@ func newMemberListCmd() *cobra.Command {
 						where(m), m.Member.Kind, dashIfEmpty(m.Member.Name), dashIfEmpty(m.Member.Binder),
 						addrOrDash(m.Member.Address), addrOrDash(m.Member.Address6),
 						prefixes(m.Member.Routes),
-						dashIfEmpty(strings.Join(m.Member.Domains, ",")), state)
+						dashIfEmpty(m.Member.Domain), state)
 					continue
 				}
 
 				fmt.Fprintf(w, "%s%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 					where(m), m.Member.Kind, dashIfEmpty(m.Member.Name), dashIfEmpty(m.Member.Binder),
 					addrOrDash(m.Member.Address), prefixes(m.Member.Routes),
-					dashIfEmpty(strings.Join(m.Member.Domains, ",")), state)
+					dashIfEmpty(m.Member.Domain), state)
 			}
 			w.Flush()
 

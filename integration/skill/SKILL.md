@@ -71,11 +71,19 @@ robinet instance token <name>          # new shared token; old endpoints stop en
 Run `wyga/robinet:1` in that network with `ROBINET_ENDPOINT` set and a volume
 at `/data`. Then admit it, below.
 
+A connector always announces one zone, and says which in its log as
+`announcing ... domain=...`. `ROBINET_DOMAIN` if set, else the platform's zone
+if robinet knows the platform (Railway announces `railway.internal`), else `.` -
+the root, meaning its network appends nothing to a name, which is what a docker
+compose network wants: `db.<connector>.<instance>.robinet` is asked over there
+as `db`. Nothing has to be configured for either. `ROBINET_DNS=0` announces
+none at all.
+
 ## Admit somebody
 
 ```sh
 robinet member pending                 # what is asking, what it announced, what it will be called
-robinet member approve <id>            # --name, --routes, --domains to change or accept less
+robinet member approve <id>            # --name, --routes to change or accept less; --no-domain refuses its zone
 robinet member reject <id> --reason "..."
 robinet member list                    # who is inside
 robinet member ban <name> --note "..."    # keep one out; routes gone, certificate refused, member stays
