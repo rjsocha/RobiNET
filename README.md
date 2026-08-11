@@ -1,4 +1,4 @@
-# robinet
+# RobiNET
 
 Reach a private network you have no route to - a Railway environment, a docker
 compose network, a subnet behind someone else's NAT - without a public address
@@ -138,16 +138,9 @@ offers nothing else.
 
 ## What it does not do
 
-- It does not forward ICMP. Ping is not a reachability test either: promiscuous
-  mode makes the connector's stack answer echo requests for every address in the
-  range it carries, whether or not anything is there.
-- It does not renew certificates. They are signed once, long lived, and a
-  connector whose network changed enrolls again.
-- It does not carry two routes to the same prefix. One route table cannot hold
-  both, so a colliding prefix blocks approval until the holder is retired -
-  `member ban`, then `member remove`, which burns its key and certificate.
-- It has no remote panel. Decisions are made on the machine that holds the
-  authority, over a unix socket.
+- It does not currently renew certificates.
+- It does not carry two routes to the same prefix. One route table cannot hold both.
+- It has no remote panel. Decisions are made on the machine that holds the authority.
 
 ## Building
 
