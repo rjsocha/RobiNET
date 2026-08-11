@@ -91,6 +91,29 @@ Doing this honestly means either understanding every type that is passed on, or
 passing through untouched the ones with no names inside them - which requires
 knowing which those are.
 
+**The name spaces, kept rather than rebuilt.** `routerTableFor` runs in four
+places - `Refresh`, `DNSPlan`, `Reach` and `SetAlias` - each on a route table
+just fetched from the hub, and each throws its result away. What survives is
+only what the router holds, which is that table with `withAliases` already
+folded in. The set of name spaces a connector actually announced exists nowhere
+in memory, so every question about it becomes a request to the hub, including
+adding an alias, which asks only to check that the name it stands for exists.
+
+The router should keep both: `base`, which is what the hub said, and the merged
+table it answers from. `Refresh` replaces `base` and the merge follows, so a
+connector admitted a minute ago still appears the way it does today. Setting an
+alias becomes a merge over what is already held, which is also what makes it
+take effect at once rather than at the next refresh. Applying aliases happens
+in one place instead of at each call site.
+
+Completing what an alias stands for falls out of that. `dns alias` takes a name
+space nobody can be expected to type from memory - it is built from the
+connector's name and the instance's, and the only way to see it is to run `dns
+list` first - and with `base` held, a read only endpoint over the socket answers
+from memory with no hub request behind a tab press. The alias itself under
+`--remove` comes from the state file the same way. Both are the shape every
+other completion here already has.
+
 ## A local panel
 
 Approving from a terminal is fine for one person. `robinet status` plus
@@ -113,6 +136,27 @@ has no IPv6 at all, the `disable_ipv6` sysctls say the rest, and checking when
 a connection comes up turns an obscure failure to configure a device into one
 line naming the sysctl. `robinet family ipv4` is then the answer, and it should
 be the line that says it.
+
+## Seeing the configuration nebula was given
+
+`renderConfig` hands its bytes straight to `config.C.LoadString` and nothing
+keeps them. So when nebula fails on something it was told, the only way to know
+what it was told is to reason about the renderer, which is how an afternoon
+goes on a failure that reproduces once in two starts.
+
+`robinet debug config <instance>` prints it. Whole, including `pki.key`: that
+is the caller's own key, in the caller's own state file, over a socket that
+belongs to them, and cutting it out would protect nobody.
+
+The instance is an argument rather than an option, in both roles. A tenant runs
+one nebula, one tun and one configuration per instance, and a hub runs one
+lighthouse per instance, so neither has a single answer to give. The hub's
+equivalent belongs next to its other subcommands.
+
+It should serve what is running, not a fresh render. The runner already holds
+the `*config.C` nebula loaded, and a re-render answers a different question:
+what would be sent if the connection started now. When those two disagree, the
+disagreement is the bug being looked for.
 
 ## Relay, tested
 
