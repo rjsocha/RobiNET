@@ -204,3 +204,49 @@ func TestHintsBecomeLabels(t *testing.T) {
 		t.Error("something with no letters at all was accepted")
 	}
 }
+
+// The lighthouse holds the one list of who is in an instance, by certificate
+// name, so <instance>.instance is a name space of its own and the resolver has
+// to be told about it alongside the connectors'.
+func TestLighthouseNamesAreRoutedToTheLighthouse(t *testing.T) {
+	table := railwayTable()
+	table.Lighthouse = enroll.Lighthouse{
+		OverlayAddress:  netip.MustParseAddr("198.19.128.1"),
+		OverlayAddress6: netip.MustParseAddr("fd9a:336b:46f6::1"),
+	}
+
+	rt := routerTableFor(table, "example")
+
+	var found bool
+	for _, d := range rt.Domains() {
+		if d == "example.instance" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("domains are %v, without the instance's own name space", rt.Domains())
+	}
+
+	route, ok := rt.match("hub.example.instance")
+	if !ok {
+		t.Fatal("a certificate name does not resolve")
+	}
+
+	// Its IPv4 address: nebula's lighthouse DNS binds one address, and that is
+	// the one it binds.
+	if route.Via.String() != "198.19.128.1" {
+		t.Fatalf("the question goes to %s", route.Via)
+	}
+
+	// And nothing is rewritten on the way. A connector's name space stands in
+	// for a name its own resolver knows; this one is already the real thing.
+	if got := route.rewrite("hub.example.instance."); got != "hub.example.instance." {
+		t.Fatalf("the name was rewritten to %s", got)
+	}
+
+	// Both families come back. Which address the question travelled to says
+	// nothing about what the answer may hold.
+	if !route.IPv4 || !route.IPv6 {
+		t.Fatalf("families are v4=%v v6=%v", route.IPv4, route.IPv6)
+	}
+}

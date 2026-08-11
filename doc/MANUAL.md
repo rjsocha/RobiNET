@@ -246,6 +246,18 @@ kept as a hint, so the owner sees what was meant and can approve it under a
 name of their own with `member approve --name`. Failing that, the connector is
 named after its key, and `robinet dns alias` gives it something readable here.
 
+**Every member is also `<member>.<kind>.<instance>.instance`.** That is the name
+its certificate was issued to, and the lighthouse answers for it: every member
+handshakes the lighthouse, so it holds the one complete list of who is where.
+The kind is `connector`, `tenant` or `hub` - the lighthouse itself is
+`hub.<instance>.instance`. This works for members that carry nothing at all,
+which the name spaces below do not cover, and it needs no connector to be
+admitted first.
+
+`robinet dns install` configures this alongside the rest; it is answered by the
+daemon's own resolver, which forwards it to the lighthouse. The hub decides
+whether to answer at all, with `dns` in its configuration.
+
 **Every name is `<something>.<connector>.<instance>.robinet`.** A connector
 announces the domain its own resolver knows - `railway.internal`, a compose
 network's name - and the daemon answers under a name space of its own instead,

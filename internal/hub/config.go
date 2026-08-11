@@ -68,6 +68,16 @@ type File struct {
 	// through. Without it, a member behind symmetric NAT has no way in.
 	Relay *bool `yaml:"relay"`
 
+	// DNS makes each lighthouse answer for the members of its instance, by
+	// their certificate names, on its own overlay address. On unless said
+	// otherwise: the lighthouse is the one party that sees every member, so it
+	// already holds the answer.
+	//
+	// Turning it off costs the names and nothing else. The device stays either
+	// way, because a lighthouse without one answers nothing at all, not even
+	// ping.
+	DNS *bool `yaml:"dns"`
+
 	Security struct {
 		// Token is known to every operator who may create an instance here. It
 		// goes into the signed bootstrap message and never travels.
@@ -194,6 +204,9 @@ func (f *File) merge(other *File) {
 	if other.Relay != nil {
 		f.Relay = other.Relay
 	}
+	if other.DNS != nil {
+		f.DNS = other.DNS
+	}
 	if other.Security.Token != "" {
 		f.Security.Token = other.Security.Token
 	}
@@ -228,6 +241,10 @@ func (f *File) applyDefaults() {
 	if f.Relay == nil {
 		on := true
 		f.Relay = &on
+	}
+	if f.DNS == nil {
+		on := true
+		f.DNS = &on
 	}
 }
 
@@ -412,6 +429,7 @@ func (f *File) Config(log *slog.Logger) (Config, error) {
 		StatePath:      f.State.Path,
 		MTU:            f.MTU,
 		Relay:          *f.Relay,
+		DNS:            *f.DNS,
 		Logger:         log,
 	}, nil
 }

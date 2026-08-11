@@ -61,6 +61,19 @@ type Config struct {
 	// Relay enables relaying on every instance's lighthouse.
 	Relay bool
 
+	// DNS makes each lighthouse answer for its instance's members, by their
+	// certificate names, on its own overlay address.
+	DNS bool
+
+	// NoLighthouseTun runs the lighthouses without a device, which costs them
+	// their DNS as well: nothing addressed to the lighthouse arrives without
+	// one.
+	//
+	// Not a deployment choice. Creating a tun needs CAP_NET_ADMIN, and the
+	// tests start a hub in process as whoever ran them; without this they
+	// would pass for root only. Nothing reads it from a configuration file.
+	NoLighthouseTun bool
+
 	Logger *slog.Logger
 }
 
@@ -95,7 +108,7 @@ func New(cfg Config) (*Hub, error) {
 		return nil, err
 	}
 
-	h := &Hub{cfg: cfg, store: store, lhs: newLighthouses(), log: cfg.Logger}
+	h := &Hub{cfg: cfg, store: store, lhs: newLighthouses(cfg.DNS, cfg.NoLighthouseTun), log: cfg.Logger}
 
 	for _, inst := range store.List() {
 		if inst.LighthouseCert == "" {

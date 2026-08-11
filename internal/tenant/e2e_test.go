@@ -65,9 +65,10 @@ func TestSharedInstance(t *testing.T) {
 			"robert": {Keys: []ssh.PublicKey{robertKey.PublicKey()}},
 			"jacek":  {Keys: []ssh.PublicKey{jacekKey.PublicKey()}},
 		},
-		StatePath: filepath.Join(dir, "hub.json"),
-		MTU:       1500,
-		Logger:    log,
+		NoLighthouseTun: true,
+		StatePath:       filepath.Join(dir, "hub.json"),
+		MTU:             1500,
+		Logger:          log,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -334,11 +335,12 @@ func TestAmbiguousMemberName(t *testing.T) {
 		Overlays: []hub.Pool{
 			{Prefix: netip.MustParsePrefix("198.19.204.0/22"), Size: 24},
 		},
-		Token:     "hub-token",
-		Binders:   hub.Binders{"robert": {Keys: []ssh.PublicKey{robertKey.PublicKey()}}},
-		StatePath: filepath.Join(dir, "hub.json"),
-		MTU:       1500,
-		Logger:    log,
+		Token:           "hub-token",
+		Binders:         hub.Binders{"robert": {Keys: []ssh.PublicKey{robertKey.PublicKey()}}},
+		NoLighthouseTun: true,
+		StatePath:       filepath.Join(dir, "hub.json"),
+		MTU:             1500,
+		Logger:          log,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -420,11 +422,12 @@ func TestSharedTokenRotation(t *testing.T) {
 		Overlays: []hub.Pool{
 			{Prefix: netip.MustParsePrefix("198.19.208.0/22"), Size: 24},
 		},
-		Token:     "hub-token",
-		Binders:   hub.Binders{"robert": {Keys: []ssh.PublicKey{robertKey.PublicKey()}}},
-		StatePath: filepath.Join(dir, "hub.json"),
-		MTU:       1500,
-		Logger:    log,
+		Token:           "hub-token",
+		Binders:         hub.Binders{"robert": {Keys: []ssh.PublicKey{robertKey.PublicKey()}}},
+		NoLighthouseTun: true,
+		StatePath:       filepath.Join(dir, "hub.json"),
+		MTU:             1500,
+		Logger:          log,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -596,10 +599,11 @@ func TestBootstrapRejections(t *testing.T) {
 		Overlays: []hub.Pool{
 			{Prefix: netip.MustParsePrefix("198.19.210.0/22"), Size: 24},
 		},
-		Token:     "hub-token",
-		Binders:   hub.Binders{"robert": {Keys: []ssh.PublicKey{known.PublicKey()}}},
-		StatePath: filepath.Join(dir, "hub.json"),
-		Logger:    log,
+		Token:           "hub-token",
+		Binders:         hub.Binders{"robert": {Keys: []ssh.PublicKey{known.PublicKey()}}},
+		NoLighthouseTun: true,
+		StatePath:       filepath.Join(dir, "hub.json"),
+		Logger:          log,
 	})
 	if err != nil {
 		t.Fatal(err)

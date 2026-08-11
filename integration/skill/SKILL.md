@@ -51,6 +51,12 @@ Names are `<something>.<connector>.<instance>.robinet`. `reach` says which name
 spaces exist and which this machine can already resolve; `dns list` says what
 the resolver would be told, and changes nothing.
 
+Every member is also `<member>.<kind>.<instance>.instance` - the name on its
+certificate, answered by the lighthouse, which every member handshakes. The
+kind is `connector`, `tenant` or `hub`. Use these to reach a member that
+carries no network, or before any connector is admitted; `dns install`
+configures them too.
+
 Do not deploy a connector for this. If one is already in that network, joining
 the instance is the whole procedure.
 
@@ -59,6 +65,7 @@ the instance is the whole procedure.
 ```sh
 robinet instance create --name <name>
 robinet instance show <name>           # prints ROBINET_ENDPOINT to paste
+robinet instance token <name>          # new shared token; old endpoints stop enrolling
 ```
 
 Run `wyga/robinet:1` in that network with `ROBINET_ENDPOINT` set and a volume
@@ -71,17 +78,33 @@ robinet member pending                 # what is asking, what it announced, what
 robinet member approve <id>            # --name, --routes, --domains to change or accept less
 robinet member reject <id> --reason "..."
 robinet member list                    # who is inside
-robinet member remove <name>           # a member that is gone; frees its name and address
-robinet member ban <name>              # one to keep out; routes gone, certificate refused everywhere
+robinet member ban <name> --note "..."    # keep one out; routes gone, certificate refused, member stays
+robinet member unban <name> --note "..."  # let it back in; nothing is reissued
+robinet member remove <name>              # forget a banned one for good; burns its key and certificate
 ```
 
 Never approve without showing the user what the request announced. Only the
 owner of an instance can approve, and nobody can be asked to approve remotely.
 
+A name is unique inside an instance and nowhere else, so `ban`, `unban` and
+`remove` refuse a name held by two instances this machine owns rather than
+guessing. `--instance <name>` settles it.
+
+**Retiring a member is two steps, in this order.** `ban` keeps it out and keeps
+it: its routes go and its certificate is refused everywhere, but it stays,
+holding its name and address, and `unban` reverses it. `remove` then forgets it
+and frees the name and the address, burning its key and certificate for good.
+
+`remove` on a member that is not banned is refused, and this is not ceremony. A
+certificate cannot be revoked, so an unbanned member holds a valid one for the
+address the removal frees, and the next member admitted would be handed an
+address something can still reach the network with.
+
 **A redeployed connector is a new member.** A fresh volume is a fresh key, so
 it arrives as a stranger and the one it replaces still holds its name and
-address. Approving is refused until the old one is removed - `member remove`,
-not `ban`, which is for keeping something out.
+address. Approving is refused until the old one is retired: `ban`, then
+`remove`. The removal burns the old key, so that container never enrols again
+without a new volume.
 
 ## Local to this machine, told to nobody
 
@@ -101,5 +124,8 @@ the machine that carries the consequence is the one that chooses.
 - Never use ping to decide whether something is reachable: a connector answers
   for every address in the range it carries, and ICMP is not forwarded. Test
   the port.
-- Never ban a member to tidy up after one that is gone. `ban` keeps it on
-  purpose, so its certificate stays refused; `remove` is the one that forgets.
+- Never reach for `remove` first. It only follows a `ban`, and the ban is what
+  makes freeing the address safe.
+- Never replace an instance's shared token to tidy up. `instance token` retires
+  every connector endpoint handed out so far; admitted connectors keep running,
+  but nobody can deploy a new one from the old string.

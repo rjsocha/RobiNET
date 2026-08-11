@@ -373,8 +373,10 @@ Nebula, as a library dependency: `nebula.Main` with an injected device factory,
 `cert.TBSCertificate.Sign`, `cert.CAPool` with the blocklist, and `config.C`.
 No fork, no patches, no vendored copy.
 
-The lighthouses run inside the hub process with the tun disabled, so there is no
-external nebula binary to supervise and no capability to grant.
+The lighthouses run inside the hub process, so there is no external nebula
+binary to supervise. Each holds a tun device, because it answers DNS on its own
+overlay address and nothing arrives there without one, so the hub is granted
+CAP_NET_ADMIN and CAP_NET_BIND_SERVICE and nothing else.
 
 WRAK, as a protocol. DLG implements the same one; robinet does not borrow its
 code.

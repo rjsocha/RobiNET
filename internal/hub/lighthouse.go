@@ -14,16 +14,26 @@ import (
 
 // lighthouse is one instance's nebula process, running in this process.
 //
-// It has no tun device: a lighthouse only answers where to find whom, and a
-// relay forwards encrypted packets between members without ever handing them to
-// an interface. So the hub needs no NET_ADMIN and no /dev/net/tun.
+// It routes nothing - a relay forwards encrypted packets between members
+// without handing them to an interface - but it does hold a device, because it
+// answers DNS on its own overlay address and nothing reaches that address
+// without one. So the hub needs CAP_NET_ADMIN and /dev/net/tun.
 type lighthouse struct {
 	control *nebula.Control
 	log     *slog.Logger
 }
 
+// lighthouseDevice names an instance's tun.
+//
+// From the port rather than the name: a port is unique on this hub by
+// construction and is already a number, and an instance's name is chosen by
+// whoever created it and has to fit in IFNAMSIZ.
+func lighthouseDevice(inst *Instance) string {
+	return fmt.Sprintf("robinet-lh%d", inst.Port)
+}
+
 // lighthouseConfig renders the nebula configuration for an instance.
-func lighthouseConfig(inst *Instance, bind string) ([]byte, error) {
+func lighthouseConfig(inst *Instance, bind string, dns, noTun bool) ([]byte, error) {
 	if inst.CACert == "" || inst.LighthouseCert == "" {
 		return nil, fmt.Errorf("instance %s has no certificate yet", inst.ID)
 	}
@@ -44,7 +54,28 @@ func lighthouseConfig(inst *Instance, bind string) ([]byte, error) {
 		"static_host_map": map[string]any{},
 		"lighthouse": map[string]any{
 			"am_lighthouse": true,
-			"serve_dns":     false,
+
+			// Every member handshakes the lighthouse, and nebula records the
+			// remote certificate's name against its overlay address as it
+			// does. So the lighthouse already holds the one complete list of
+			// who is where, and answering for it costs a listener.
+			//
+			// The names are the certificate names:
+			// <member>.<kind>.<instance>.instance, which is what
+			// MemberCertName builds and what a member can be reached by
+			// without this machine's resolver being told anything.
+			//
+			// Off when the hub says so, and off without a device whatever the
+			// hub says: nothing addressed to the lighthouse arrives without
+			// one, so a listener would answer nobody.
+			"serve_dns": dns && !noTun,
+			"dns": map[string]any{
+				// The overlay address, not the host's. Reachable only from
+				// inside the instance, which is the whole of who should be
+				// asking, and it needs the tun below to exist at all.
+				"host": inst.LighthouseAddress.String(),
+				"port": 53,
+			},
 		},
 		"listen": map[string]any{
 			"host": bind,
@@ -59,9 +90,15 @@ func lighthouseConfig(inst *Instance, bind string) ([]byte, error) {
 			"am_relay":   inst.Relay,
 			"use_relays": false,
 		},
-		// No tun. A lighthouse routes nothing itself.
+		// A lighthouse routes nothing, but it does answer: DNS above is served
+		// on its overlay address, and a packet only arrives there through a
+		// device. A disabled tun answers ICMP echo and discards the rest.
+		//
+		// One device per instance, named after its port, because the hub runs
+		// one lighthouse per instance and they cannot share a name.
 		"tun": map[string]any{
-			"disabled": true,
+			"dev":      lighthouseDevice(inst),
+			"disabled": noTun,
 		},
 		"firewall": map[string]any{
 			"outbound": []map[string]any{
@@ -81,8 +118,8 @@ func lighthouseConfig(inst *Instance, bind string) ([]byte, error) {
 }
 
 // startLighthouse brings an instance's nebula up.
-func startLighthouse(inst *Instance, bind string, log *slog.Logger) (*lighthouse, error) {
-	raw, err := lighthouseConfig(inst, bind)
+func startLighthouse(inst *Instance, bind string, dns, noTun bool, log *slog.Logger) (*lighthouse, error) {
+	raw, err := lighthouseConfig(inst, bind, dns, noTun)
 	if err != nil {
 		return nil, err
 	}
@@ -113,12 +150,18 @@ func (l *lighthouse) stop() {
 
 // lighthouses tracks the running instances.
 type lighthouses struct {
+	// dns and noTun are the hub's, not one instance's: every lighthouse here
+	// answers or none does, and a machine either can create a device or
+	// cannot.
+	dns   bool
+	noTun bool
+
 	mu      sync.Mutex
 	running map[string]*lighthouse
 }
 
-func newLighthouses() *lighthouses {
-	return &lighthouses{running: map[string]*lighthouse{}}
+func newLighthouses(dns, noTun bool) *lighthouses {
+	return &lighthouses{dns: dns, noTun: noTun, running: map[string]*lighthouse{}}
 }
 
 func (ls *lighthouses) start(inst *Instance, bind string, log *slog.Logger) error {
@@ -129,7 +172,7 @@ func (ls *lighthouses) start(inst *Instance, bind string, log *slog.Logger) erro
 		return nil
 	}
 
-	lh, err := startLighthouse(inst, bind, log)
+	lh, err := startLighthouse(inst, bind, ls.dns, ls.noTun, log)
 	if err != nil {
 		return err
 	}

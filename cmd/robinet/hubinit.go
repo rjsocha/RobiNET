@@ -132,6 +132,15 @@ mtu: 1500
 # it, a member behind symmetric NAT has no way in.
 relay: true
 
+# Let each lighthouse answer for the members of its instance, by their
+# certificate names, on its own overlay address. The lighthouse is the one
+# party every member handshakes, so it already holds the answer.
+#
+# Turning this off costs the names and nothing else. Either way each lighthouse
+# holds a tun device, which is why the hub needs CAP_NET_ADMIN, and DNS also
+# needs CAP_NET_BIND_SERVICE for port 53.
+dns: true
+
 security:
   # Known to every operator who may create an instance here. It goes into the
   # signed bootstrap message and is never transmitted, so a captured signature

@@ -137,6 +137,29 @@ func routerTableFor(table *hub.RouteTable, instance string) routerTable {
 		})
 	}
 
+	// The lighthouse answers for every member of its instance by certificate
+	// name, which is a name space of its own rather than any connector's, and
+	// the only one that covers members carrying nothing.
+	//
+	// Through the router like everything else, and not as a second server on
+	// the link: a resolver attaches servers to a link and domains to a link,
+	// never a domain to a server, so two servers there would send half the
+	// questions to whichever could not answer them.
+	//
+	// Its IPv4 address, because nebula's lighthouse DNS binds one address and
+	// that is the one it binds. Both families are still answered: which
+	// address the question travels to says nothing about what comes back.
+	if lh := table.Lighthouse.OverlayAddress; lh.IsValid() {
+		name := strings.ToLower(instance + "." + hub.CertSuffix)
+		out.routes = append(out.routes, routerRoute{
+			Virtual: name,
+			Real:    name,
+			Via:     lh,
+			IPv4:    true,
+			IPv6:    true,
+		})
+	}
+
 	return out
 }
 
