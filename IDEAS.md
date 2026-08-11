@@ -268,6 +268,97 @@ machine: a container per instance, with `NET_ADMIN` and its own tun, so each
 gets its own route table. The connector already runs this way. The tenant does
 not, and the collision is refused instead.
 
+## The connector on a host rather than in a container
+
+A connector deployed as a container inside the network it exposes is the case
+the tool was built for, and it is not the only one. A plain machine - a VM with
+a subnet behind it, a bastion, a NAS - has nothing to deploy into: the network
+being exposed is the machine's own. Today the answer is a container with
+`network_mode: host`, and that answer is worse than it looks.
+
+`attachedPrefixes()` walks `net.Interfaces()`, so in the host namespace it
+finds the host's interfaces. On a machine that runs docker at all this means
+announcing `172.17.0.0/16`, every compose bridge, every other overlay the host
+carries - and, when that host is also a member, the instance's own overlay. The
+last one collides with the instance it is enrolling into. Nothing is broken by
+it, since the owner sees the list in `member pending` and `--routes` narrows it,
+but the default is a request nobody would approve as it stands. `.` is
+announced as the zone for the same reason: no platform is recognized, so the
+root is the honest answer, and on a host with a real search domain it is not
+the useful one.
+
+So: `robinet connector` as a role installed on the machine, the way `robinet
+setup` installs the tenant. A unit, a state directory, the same enrollment, and
+a default for what to announce that comes from the operator rather than from
+whatever docker left on the box.
+
+Two modes, and the mode is what decides how packets leave:
+
+- **`--mode=user`** is what the container does today. A user space stack, no
+  capabilities, no device. Nothing on the host changes, and the machine's own
+  routing is untouched.
+- **`--mode=host`** runs nebula with a real tun, which needs `CAP_NET_ADMIN`
+  and `/dev/net/tun` - the same path the tenant already takes, and the same
+  unit shape `robinet setup` already writes. The exposed network is then
+  reached by the kernel rather than by a stack inside the process: forwarding
+  instead of a proxy per flow, the host's own routing table deciding where a
+  packet goes, and protocols other than TCP and UDP working because nothing has
+  to terminate them.
+
+The larger difference is that the overlay address stops belonging to the
+process and starts belonging to the machine. Whatever the host already listens
+on answers there, sshd first of all, so the connector becomes something a
+member can connect **to** rather than only something that carries traffic
+onward. `ssh -D 1080 <connector>.connector.<instance>.instance` is then a socks
+proxy inside that network, under a name the lighthouse already answers for,
+with no `dns install` and nothing announced. The user space stack cannot offer
+that at all: it is a gateway outward, and the only things reachable on its
+address are the ones it was written to serve.
+
+Which makes the connector's nebula firewall a decision rather than a detail.
+Today it says `inbound: any/any/any` (`internal/connector/nebconfig.go`), and
+that is fine while the only thing behind the address is a user space stack
+serving what it was written to serve: the rule is there to pass **forwarded**
+traffic into the carried network. In host mode the same rule hands every member
+of the instance every port on the machine, which is a default nobody chose.
+
+The tenant already has the vocabulary - `robinet inbound [ping|open|none]`,
+local, told to nobody, on the grounds that joining an instance to reach a
+network is not an offer to be reached back. Exposing a network is not an offer
+to be logged into either, and `ping` is as good a default here.
+
+Where that setting lives is not settled. `robinet connector inbound ...` puts
+it beside the role it belongs to, at the cost of a second place that means what
+`robinet inbound` already means for the tenant. An environment variable is the
+other candidate, since a connector is configured entirely by those wherever it
+runs in a container.
+
+One thing the tenant does not have to solve: a connector must keep passing
+forwarded traffic whatever it decides about itself, so `none` cannot be
+literal. The two are separable in nebula's own model - a rule carries a
+`local_cidr`, and today `default_local_cidr_any` collapses them deliberately,
+because without it a rule matches only our own address and every forwarded
+packet is dropped. So the shape is one rule pinned to the carried prefixes,
+which stays open because carrying them is the entire job, and a second for the
+connector's own overlay address, which is what `inbound` would govern.
+
+What the mode does **not** decide is a service on the exposed machine's own
+loopback. No route reaches `127.0.0.1`: it is local on the tenant's machine
+too, so nothing there could ever send it down a tunnel. And the tun makes it
+harder rather than easier, since a packet arriving for the connector's overlay
+address is delivered by the kernel only to a socket bound to that address or to
+`0.0.0.0`, never to one bound to `127.0.0.1`, which is what DNAT plus
+`route_localnet` exists to work around and why nobody should.
+
+That belongs to a separate idea: **publishing a host local port on the
+connector's overlay address**, `127.0.0.1:5432` answered as port `5432` on the
+address the instance already knows the connector by. An address and port
+mapping rather than a route. The user space stack is where it is nearly free -
+it already terminates the connection and opens a second one with an ordinary
+socket, and a process on the host dials its own loopback without anything
+special - so this is a reason to keep that mode rather than an argument for the
+other one.
+
 ## A skill for the package
 
 The manual is written for an agent. A hopper skill would put it where an agent
