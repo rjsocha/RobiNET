@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rjsocha/robinet/internal/enroll"
+	"github.com/rjsocha/robinet/internal/pin"
 )
 
 // hubClient talks to the enrollment mailbox.
@@ -23,9 +24,22 @@ type hubClient struct {
 	log    *slog.Logger
 }
 
-func newHubClient(base, sharedToken string, insecure bool, log *slog.Logger) *hubClient {
+// newHubClient builds the client both the enrollment and the blocklist poll
+// use, so a pin given once covers everything this connector ever asks the hub.
+//
+// A pin wins over Insecure rather than combining with it: one names the key
+// that must answer, the other says any key will do, and the stricter of the
+// two is what somebody handing out a pinned endpoint meant.
+func newHubClient(base, sharedToken string, insecure bool, hubPin string, log *slog.Logger) (*hubClient, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if insecure {
+	switch {
+	case hubPin != "":
+		cfg, err := pin.TLSConfig(hubPin)
+		if err != nil {
+			return nil, err
+		}
+		transport.TLSClientConfig = cfg
+	case insecure:
 		// The hub's certificate is usually self signed. The enrollment payload
 		// is authenticated by the shared token instead, and the certificate
 		// that comes back cannot be forged by whoever carries it.
@@ -37,7 +51,7 @@ func newHubClient(base, sharedToken string, insecure bool, log *slog.Logger) *hu
 		token:  sharedToken,
 		client: &http.Client{Transport: transport, Timeout: 30 * time.Second},
 		log:    log,
-	}
+	}, nil
 }
 
 // submit posts an enrollment request and returns its id.

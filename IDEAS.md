@@ -386,6 +386,69 @@ socket, and a process on the host dials its own loopback without anything
 special - so this is a reason to keep that mode rather than an argument for the
 other one.
 
+## macOS and Windows - research only
+
+Nothing is decided here, not even whether it is worth doing. This is what a
+port would run into, written down so the question can be answered later without
+starting from nothing.
+
+The compiler says less is in the way than the "Linux only" line suggests.
+`GOOS=darwin` and `GOOS=windows` build every package except `internal/tenant`
+and the command that depends on it - nebula, gvisor, the hub, the connector,
+the user space stack, all of it, unchanged.
+
+**The connector is nearly there.** It has no tun, no capabilities and nothing
+from netlink: `userdev` is a pair of pipes and the rest is gvisor over UDP
+sockets. What is left is the resolver, `/etc/resolv.conf` in
+`internal/netstack/dns.go`, which does not exist on Windows and needs
+`GetAdaptersAddresses` instead, and a state directory that defaults to a Linux
+path but is already a flag. Whether anybody wants it is a separate question:
+a connector runs inside the network being exposed, and that is a container.
+
+**The hub is a deployment problem, not a code one.** `hub install` writes a
+systemd unit, the paths are `/etc/site/robinet` and `/var/lib/robinet`, and the
+lighthouse wants a tun unless `NoLighthouseTun` is set, which also turns
+`serve_dns` off and takes the `.instance` names with it. It is a server role and
+nobody is asking for it elsewhere.
+
+**The tenant is where the work is**, and four things are in the way.
+
+The control socket authenticates its peer with `SO_PEERCRED`
+(`internal/tenant/socket.go`), which is the only thing that breaks the build.
+macOS has `LOCAL_PEERCRED` and it substitutes directly. Windows has AF_UNIX and
+no peer credentials at all, so it needs a different answer - a named pipe with
+the client's SID, or a token in a file with an ACL. That is a design decision
+rather than a port.
+
+The permission model is `CAP_NET_ADMIN`, read out of `/proc/self/status`
+(`internal/tenant/capability.go`) and granted by systemd. Neither system has an
+equivalent, so both fall back to full root, which is exactly what asking for one
+capability was meant to avoid. The systemd unit, the ambient capability and the
+`sudo` re-exec in `cmd/robinet/setup.go` all have to be written again for
+launchd and for the service manager.
+
+The resolver is the deepest binding - `/etc/systemd/network` and `resolvectl`
+in `internal/tenant/dns.go` - but the seam is already there. `ModeSystemd` is
+one entry in a list of modes, and macOS maps onto it unusually well:
+`/etc/resolver/<domain>` is natively "this domain through this resolver", which
+is the thing this code wants and the thing `resolv.conf` cannot say. Windows has
+NRPT, which can express it too, with more ceremony.
+
+Device names collide with the platform. `nextDevice` hands out `robinet0`, and
+nebula on darwin ignores that name with a warning and takes whatever `utun` the
+kernel gives it. The tenant keys its state and its resolver configuration on
+`conn.Device`, so it would be configuring an interface that does not exist. The
+name has to be read back from the device rather than declared.
+
+On Windows, nebula uses wintun, so the driver DLL ships beside the binary.
+
+If any of this is ever done, the tenant on macOS is the one worth doing: it is
+the only role somebody sits in front of, and the resolver - the part that looked
+hardest - is the part that maps cleanest. Windows is expensive not because of
+the tun, which works, but because two assumptions the design rests on, a socket
+that knows who is on the other end and a capability instead of root, have no
+counterpart there.
+
 ## A skill for the package
 
 The manual is written for an agent. A hopper skill would put it where an agent
@@ -395,8 +458,12 @@ looks by default, the way `dlg` ships one. Same content, different envelope.
 
 - **Authenticating the enrollment poll.** Anyone holding both identifiers can
   read a bundle. Everything in it is public and useless without the connector's
-  private key, so this was accepted knowingly. Requiring the shared token here
-  would close it, at the cost of making a token mandatory.
+  private key, so this was accepted knowingly. Reading it is not the whole
+  worry any more: the same endpoint carries the blocklist to a running
+  connector, and nothing in the answer is signed, so whoever sits in the middle
+  can keep a ban from arriving. Pinning the hub closes that for anybody who
+  carries a pin. Requiring the shared token here would close the rest, at the
+  cost of making a token mandatory.
 - **Multi platform image.** `wyga/robinet:1` is amd64 only. The hopper package
   too.
 - **Hints from outside.** whois, geo, BGP lookups on a connector's source

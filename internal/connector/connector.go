@@ -57,6 +57,12 @@ type Config struct {
 	// normal case for a self signed hub.
 	Insecure bool
 
+	// Pin is the hash of the hub's public key, carried in the endpoint by
+	// whoever handed it over. Stronger than Insecure: it names one key rather
+	// than trusting anybody a certificate authority would vouch for, and it is
+	// what stops somebody in the middle keeping a ban from arriving.
+	Pin string
+
 	// DNS forwards queries sent to our overlay address to the resolver this
 	// container uses.
 	DNS bool
@@ -161,7 +167,11 @@ func Run(ctx context.Context, cfg Config) error {
 			log.Info("telling the owner", "hint", k, "value", req.Hints[k])
 		}
 
-		client := newHubClient(cfg.HubURL, cfg.SharedToken, cfg.Insecure, log)
+		client, err := newHubClient(cfg.HubURL, cfg.SharedToken, cfg.Insecure, cfg.Pin, log)
+		if err != nil {
+			return err
+		}
+
 		bundle, err := client.waitForApproval(ctx, cfg.Instance, req, state)
 		if err != nil {
 			return err
@@ -338,9 +348,24 @@ func watchBlocklist(ctx context.Context, cfg Config, state *State, c *config.C, 
 		return
 	}
 
-	client := newHubClient(cfg.HubURL, cfg.SharedToken, cfg.Insecure, log)
+	client, err := newHubClient(cfg.HubURL, cfg.SharedToken, cfg.Insecure, cfg.Pin, log)
+	if err != nil {
+		log.Warn("no blocklist will be read", "error", err)
+		return
+	}
+
+	// Computed the way the owner computed it when the certificate was signed,
+	// from the same certificate, so the two strings are comparable without
+	// anything being sent for the purpose.
+	self, err := ownFingerprint(state.Bundle)
+	if err != nil {
+		log.Warn("cannot tell whether a ban is this connector's own", "error", err)
+	}
+
 	ticker := time.NewTicker(blocklistInterval)
 	defer ticker.Stop()
+
+	banned := false
 
 	for {
 		select {
@@ -355,12 +380,31 @@ func watchBlocklist(ctx context.Context, cfg Config, state *State, c *config.C, 
 			continue
 		}
 
-		if slices.Equal(res.Bundle.Blocked, state.Bundle.Blocked) {
+		// A ban is reversible, so being on the list is a state to report and
+		// keep watching rather than a reason to stop. Nothing else can be done
+		// from here anyway: every other member is already refusing us, and the
+		// way back is somebody running member unban.
+		if now := self != "" && slices.Contains(res.Bundle.Blocked, self); now != banned {
+			banned = now
+			if banned {
+				log.Warn("this connector has been banned", "instance", cfg.Instance,
+					"detail", "every member of this instance refuses it until somebody unbans it")
+			} else {
+				log.Info("this connector has been unbanned", "instance", cfg.Instance)
+			}
+		}
+
+		// Our own fingerprint is dropped rather than installed: refusing our
+		// own certificate says nothing to nebula, and the ban is reported
+		// above instead of being buried in a count.
+		fresh := without(res.Bundle.Blocked, self)
+
+		if slices.Equal(fresh, state.Bundle.Blocked) {
 			continue
 		}
 
 		updated := *state.Bundle
-		updated.Blocked = res.Bundle.Blocked
+		updated.Blocked = fresh
 
 		raw, err := nebulaConfig(&updated, state.PrivateKeyPEM)
 		if err != nil {
@@ -379,6 +423,36 @@ func watchBlocklist(ctx context.Context, cfg Config, state *State, c *config.C, 
 
 		log.Info("blocklist updated", "blocked", len(updated.Blocked))
 	}
+}
+
+// ownFingerprint identifies this connector's certificate the way the hub
+// identifies everybody's, which is what makes a ban on ourselves visible.
+func ownFingerprint(bundle *enroll.Bundle) (string, error) {
+	if bundle == nil || bundle.Certificate == "" {
+		return "", fmt.Errorf("this connector holds no certificate")
+	}
+
+	issued, _, err := cert.UnmarshalCertificateFromPEM([]byte(bundle.Certificate))
+	if err != nil {
+		return "", err
+	}
+	return issued.Fingerprint()
+}
+
+// without returns the list with one entry taken out, leaving it alone when
+// there is nothing to take out.
+func without(list []string, drop string) []string {
+	if drop == "" || !slices.Contains(list, drop) {
+		return list
+	}
+
+	out := make([]string, 0, len(list))
+	for _, v := range list {
+		if v != drop {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // describeNetwork says what this connector made of where it is running.

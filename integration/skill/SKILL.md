@@ -71,6 +71,12 @@ robinet instance token <name>          # new shared token; old endpoints stop en
 Run `wyga/robinet:1` in that network with `ROBINET_ENDPOINT` set and a volume
 at `/data`. Then admit it, below.
 
+Paste that endpoint whole. It is `host/instance` with a shared token and the
+hub's pin after it when there are any, and the pin is the part worth keeping:
+it is what stops somebody in the middle keeping a ban from reaching the
+connector. Nothing in the string is decoration and none of it is optional once
+it is printed.
+
 A connector always announces one zone, and says which in its log as
 `announcing ... domain=...`. `ROBINET_DOMAIN` if set, else the platform's zone
 if robinet knows the platform (Railway announces `railway.internal`), else `.` -
@@ -102,6 +108,12 @@ guessing. `--instance <name>` settles it.
 it: its routes go and its certificate is refused everywhere, but it stays,
 holding its name and address, and `unban` reverses it. `remove` then forgets it
 and frees the name and the address, burning its key and certificate for good.
+
+A ban is not instant everywhere. This machine takes it on its next refresh, and
+a connector within five minutes, which is how often one asks. A banned
+connector does not stop or exit: it logs that it was banned and keeps running,
+refused by everybody until `unban`, and neither the ban nor the unban needs it
+restarted. A container that looks alive after a ban is behaving correctly.
 
 `remove` on a member that is not banned is refused, and this is not ceremony. A
 certificate cannot be revoked, so an unbanned member holds a valid one for the

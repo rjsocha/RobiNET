@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/rjsocha/robinet/internal/hub"
+	"github.com/rjsocha/robinet/internal/pin"
 	"github.com/rjsocha/robinet/internal/variant"
 	"github.com/rjsocha/robinet/internal/version"
 	"golang.org/x/sys/unix"
@@ -430,12 +431,11 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if owned, ok := d.state.Owned(conn.InstanceID); ok {
-			var hubURL string
-			d.state.Read(func(s *data) { hubURL = s.HubURL })
+			hubURL, hubPin := d.hubAddress()
 			// By name: it resolves everywhere an identifier does, it is
 			// unique on the hub, and it is the thing somebody has to type
 			// into a platform's environment without a way to check it.
-			entry.Endpoint = shorthandEndpoint(hubURL, instanceRef(conn), owned.SharedToken)
+			entry.Endpoint = shorthandEndpoint(hubURL, instanceRef(conn), owned.SharedToken, hubPin)
 		}
 
 		status.Connections = append(status.Connections, entry)
@@ -479,14 +479,13 @@ func (d *Daemon) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// The enrollment url is what a connector is configured with, and this is
 	// the only moment somebody has to copy it somewhere, so hand it over whole
 	// rather than in pieces to be assembled.
-	var hubURL string
-	d.state.Read(func(s *data) { hubURL = s.HubURL })
+	hubURL, hubPin := d.hubAddress()
 
 	out := map[string]any{
 		"id":           created.ID,
 		"name":         created.Name,
 		"overlay":      created.Overlay,
-		"endpoint":     shorthandEndpoint(hubURL, created.Name, sharedToken),
+		"endpoint":     shorthandEndpoint(hubURL, created.Name, sharedToken, hubPin),
 		"enroll_url":   fmt.Sprintf("%s/v1/enroll/%s", hubURL, created.ID),
 		"shared_token": sharedToken,
 	}
@@ -502,8 +501,7 @@ func (d *Daemon) handleCreate(w http.ResponseWriter, r *http.Request) {
 // instanceInfo is what somebody needs in order to point a connector at an
 // instance: one string, in the short form a platform's environment takes.
 func (d *Daemon) instanceInfo(id, ref, overlay, sharedToken string) map[string]any {
-	var hubURL string
-	d.state.Read(func(s *data) { hubURL = s.HubURL })
+	hubURL, hubPin := d.hubAddress()
 
 	if ref == "" {
 		ref = id
@@ -512,7 +510,7 @@ func (d *Daemon) instanceInfo(id, ref, overlay, sharedToken string) map[string]a
 	// The endpoint carries the name and the url carries the identifier: one is
 	// typed by a person into a platform's environment, the other is followed
 	// by a program.
-	endpoint := shorthandEndpoint(hubURL, ref, sharedToken)
+	endpoint := shorthandEndpoint(hubURL, ref, sharedToken, hubPin)
 
 	return map[string]any{
 		"id":       id,
@@ -531,9 +529,37 @@ func instanceRef(conn *Connection) string {
 	return conn.InstanceID
 }
 
-// shorthandEndpoint renders host/instance[/token], dropping the port when it
-// is the default one a connector already assumes.
-func shorthandEndpoint(hubURL, id, token string) string {
+// hubAddress is where this machine's hub is and how it verifies it, in the
+// notation an endpoint carries. A pin that cannot be read is left out rather
+// than passed on: an endpoint carrying a broken pin refuses every connector
+// pointed at it.
+func (d *Daemon) hubAddress() (hubURL, hubPin string) {
+	var stored string
+	d.state.Read(func(s *data) {
+		hubURL = s.HubURL
+		stored = s.Pin
+	})
+
+	if stored == "" {
+		return hubURL, ""
+	}
+
+	written, err := pin.Rewritten(stored)
+	if err != nil {
+		d.log.Warn("this machine's hub pin cannot be written into an endpoint", "error", err)
+		return hubURL, ""
+	}
+	return hubURL, written
+}
+
+// shorthandEndpoint renders host/instance[/token][/pin], dropping the port
+// when it is the default one a connector already assumes.
+//
+// The pin travels with the rest rather than being something to remember,
+// because the one string this returns is the whole of what somebody pastes
+// into a platform's environment. Whatever this machine verifies the hub by is
+// what a connector should verify it by too.
+func shorthandEndpoint(hubURL, id, token, hubPin string) string {
 	host := hubURL
 	if u, err := url.Parse(hubURL); err == nil && u.Host != "" {
 		host = u.Host
@@ -543,6 +569,9 @@ func shorthandEndpoint(hubURL, id, token string) string {
 	out := host + "/" + id
 	if token != "" {
 		out += "/" + token
+	}
+	if hubPin != "" {
+		out += "/" + hubPin
 	}
 	return out
 }

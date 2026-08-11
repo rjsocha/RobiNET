@@ -401,12 +401,29 @@ func (h *Hub) Result(ref, requestID string) (*enroll.Result, error) {
 	res := &enroll.Result{Status: record.Status, Reason: record.Reason}
 	switch record.Status {
 	case enroll.StatusApproved:
-		res.Bundle = record.Bundle
+		res.Bundle = withBlocklist(record.Bundle, inst)
 	default:
 		res.RetryAfter = 30
 	}
 
 	return res, nil
+}
+
+// withBlocklist answers with the refusals as they stand now rather than as
+// they stood when the bundle was signed.
+//
+// This endpoint is the only thing a running connector comes back to, so it is
+// the only way a ban reaches the node carrying the network somebody was banned
+// from. The bundle it was approved with is left alone: everything else in
+// there was decided once, and the blocklist is the one part that is not.
+func withBlocklist(bundle *enroll.Bundle, inst *Instance) *enroll.Bundle {
+	if bundle == nil {
+		return nil
+	}
+
+	fresh := *bundle
+	fresh.Blocked = blockedIn(inst)
+	return &fresh
 }
 
 // Pending returns the requests waiting for a decision.

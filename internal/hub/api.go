@@ -526,7 +526,7 @@ func (h *Hub) handleJoinResult(w http.ResponseWriter, r *http.Request, who *Regi
 
 		res := enroll.Result{Status: record.Status, Reason: record.Reason}
 		if record.Status == enroll.StatusApproved {
-			res.Bundle = record.Bundle
+			res.Bundle = withBlocklist(record.Bundle, inst)
 		} else {
 			res.RetryAfter = 15
 		}

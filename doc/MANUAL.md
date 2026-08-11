@@ -79,7 +79,7 @@ what makes it deployable on a platform that offers nothing else.
 
 | Variable | Meaning |
 |---|---|
-| `ROBINET_ENDPOINT` | `host/instance[/token]`, or a full enrollment url |
+| `ROBINET_ENDPOINT` | `host/instance[/token][/pin]`, or a full enrollment url |
 | `ROBINET_INSTANCE` | instance id, when the endpoint is only a hub url |
 | `ROBINET_TOKEN` | the instance's shared token, when the endpoint does not carry it |
 
@@ -107,12 +107,21 @@ stops being able to enroll anything new.
 ```
 192.0.2.10/76615289c33b3186              host and instance
 192.0.2.10/76615289c33b3186/sekret       and the shared token
+192.0.2.10/76615289c33b3186/SHA256:uT9x  and the hub's pin
+192.0.2.10/76615289c33b3186/sekret/SHA256:uT9x
 192.0.2.10:9443/76615289c33b3186         on a non default port
 https://hub.example.com:8443/v1/enroll/76615289c33b3186
 ```
 
 Port 8443 is assumed when none is given. Ask the instance's owner for this
 string: `robinet status` prints it for the instances they own.
+
+The token and the pin are both optional and neither is found by counting: a
+pin says what it is, so `SHA256:` is what tells the two apart. A pin appears in
+the string when the machine that printed it verifies its own hub by one, and it
+is worth carrying - it is what stops somebody in the middle keeping a ban from
+reaching this connector. Nothing else in an enrollment result can be forged,
+but the blocklist can be withheld.
 
 docker compose:
 
@@ -180,6 +189,7 @@ waiting for a decision
 | `robinet member reject <id> --reason "..."` | refuses; a connector that restarts asks again |
 | `robinet member ban <name> --note "..."` | takes its routes away and puts its certificate on every member's blocklist, so it can no longer reach anybody; the member stays, holding its name and its address |
 | `robinet member unban <name> --note "..."` | takes it off every blocklist and puts its routes back; nothing is reissued |
+| | a ban reaches this machine on the next refresh and a connector within five minutes, since that is how often one asks. A banned connector says so in its log and keeps running: it is refused by everybody until it is unbanned, and it needs no restart either way |
 | `robinet member remove <name>` | forgets a banned member and frees its name and address, burning its key and its certificate for good; refused for one that is not banned |
 | `robinet member ban <name> --instance <instance>` | settles which one is meant; a name is unique inside an instance and nowhere else, so `ban`, `unban` and `remove` refuse a name held in two of them rather than guessing |
 | `robinet member approve <id> --no-domain` | admits it and refuses the zone it announced: it carries routes and no names. There is nothing between the two, since it answers for the zone its own resolver knows or for none |
@@ -221,6 +231,7 @@ change no certificate.
 | `<name> is a member of <a> and <b>: say which with --instance` | a name is unique inside an instance and nowhere else | add `--instance <name>`, or use the fingerprint instead |
 | `this key was removed from <instance> and will not be admitted again` | a removed connector is enrolling with the key that was burned when it was removed | give it a new keypair, which for a container means a fresh state volume |
 | `enrollment refused, waiting before letting this process exit` | the hub turned the request away, and it will turn the next one away the same way | read the error beside it; the connector waits 30s before exiting so a supervisor restarting it does not bury the reason |
+| `this connector has been banned` | somebody ran `robinet member ban` on it; every member of that instance now refuses it | nothing on the connector. It keeps running and keeps asking, and `robinet member unban` brings it back without a restart |
 | `ROBINET_DOMAIN: domain ... is not a letter, digit or hyphen` | the variable holds something that is not one zone | one zone, or `.` for a network that appends nothing; refused before anything reaches the hub |
 | `the daemon is running <x> and this command is <y>` | the binary was upgraded, the service still runs the old one | `robinet restart` |
 | `robinet is not configured: ROBINET_ENDPOINT is still CHANGEME` | a template was deployed without being edited | set it to what `robinet instance show` printed |
@@ -310,10 +321,16 @@ retrying is the whole fix.
 **ICMP is not forwarded.** TCP and UDP are.
 
 **A hub is verified by a pin, not by an authority.** Its certificate is usually
-self signed. `robinet join --pin sha256/...` checks the hub's public key
+self signed. `robinet join --pin SHA256:...` checks the hub's public key
 against that value and nothing else, which is a narrower statement than any
 certificate authority makes. A build handed out to a group carries the pin
-already. `--insecure` accepts anything and is the weaker answer.
+already, and a connector's endpoint carries it as its last part. `--insecure`
+accepts anything and is the weaker answer.
+
+Pins were once written `sha256/` with standard base64. That form is still read
+everywhere one is accepted, so nothing has to be reissued, but it contains a
+`/` and cannot travel in an endpoint. What `robinet hub test` prints is the
+current form.
 
 **Both families, always signed.** Every member gets an IPv4 and an IPv6 address
 from its instance, and its certificate carries both, because nebula refuses an

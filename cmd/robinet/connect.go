@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/rjsocha/robinet/internal/connector"
+	"github.com/rjsocha/robinet/internal/pin"
 	"github.com/spf13/cobra"
 )
 
@@ -47,7 +48,7 @@ otherwise this connector comes back as a new identity each time.`,
 				return refusePlaceholder(cmd.Context())
 			}
 
-			base, id, shorthandToken, err := parseEndpoint(hubURL)
+			base, id, shorthandToken, hubPin, err := parseEndpoint(hubURL)
 			if err != nil {
 				return err
 			}
@@ -87,6 +88,7 @@ otherwise this connector comes back as a new identity each time.`,
 				StateDir:            stateDir,
 				MTU:                 mtu,
 				Insecure:            insecure,
+				Pin:                 hubPin,
 				DNS:                 dns,
 				Logger:              newLogger(logLevel),
 			})
@@ -95,7 +97,7 @@ otherwise this connector comes back as a new identity each time.`,
 
 	f := cmd.Flags()
 	f.StringVar(&hubURL, "endpoint", envOr("ROBINET_ENDPOINT", ""),
-		"host/instance[/token], or a full enrollment url [ROBINET_ENDPOINT]")
+		"host/instance[/token][/pin], or a full enrollment url [ROBINET_ENDPOINT]")
 	f.StringVar(&instance, "instance", envOr("ROBINET_INSTANCE", ""), "instance id on the hub [ROBINET_INSTANCE]")
 	f.StringVar(&token, "token", envOr("ROBINET_TOKEN", ""), "shared token to sign the enrollment with [ROBINET_TOKEN]")
 	f.StringVar(&name, "name", envOr("ROBINET_NAME", ""), "label shown to whoever approves this [ROBINET_NAME]")
@@ -116,19 +118,21 @@ const DefaultAPIPort = "8443"
 
 // parseEndpoint reads either form of what a connector is told.
 //
-//	192.0.2.10/76615289c33b3186            shorthand
-//	192.0.2.10/76615289c33b3186/sekret     shorthand carrying the token
-//	192.0.2.10:9443/76615289c33b3186       shorthand on another port
+//	192.0.2.10/76615289c33b3186                    shorthand
+//	192.0.2.10/76615289c33b3186/sekret             shorthand carrying the token
+//	192.0.2.10/76615289c33b3186/SHA256:uT9x...     and the hub's pin
+//	192.0.2.10/76615289c33b3186/sekret/SHA256:uT9x...
+//	192.0.2.10:9443/76615289c33b3186               shorthand on another port
 //	https://hub.example.com:8443/v1/enroll/76615289c33b3186
 //
 // The shorthand exists because this is usually typed into a platform's
 // environment by hand, and one field is easier to get right than three. A full
 // url is taken as it is, and then the token has to be given separately, since
 // a url has nowhere sensible to put it.
-func parseEndpoint(raw string) (base, instance, token string, _ error) {
+func parseEndpoint(raw string) (base, instance, token, hubPin string, _ error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", "", "", nil
+		return "", "", "", "", nil
 	}
 
 	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
@@ -137,22 +141,24 @@ func parseEndpoint(raw string) (base, instance, token string, _ error) {
 		i := strings.Index(raw, marker)
 		if i < 0 {
 			// A bare hub url: the instance comes from its own flag.
-			return strings.TrimRight(raw, "/"), "", "", nil
+			return strings.TrimRight(raw, "/"), "", "", "", nil
 		}
 
 		instance = strings.Trim(raw[i+len(marker):], "/")
 		if instance == "" {
-			return "", "", "", fmt.Errorf("enrollment url %q names no instance", raw)
+			return "", "", "", "", fmt.Errorf("enrollment url %q names no instance", raw)
 		}
-		return raw[:i], instance, "", nil
+		return raw[:i], instance, "", "", nil
 	}
+
+	const shape = "host/instance[/token][/pin]"
 
 	parts := strings.Split(strings.Trim(raw, "/"), "/")
 	if len(parts) < 2 {
-		return "", "", "", fmt.Errorf("endpoint %q is not host/instance[/token] and not a url", raw)
+		return "", "", "", "", fmt.Errorf("endpoint %q is not %s and not a url", raw, shape)
 	}
-	if len(parts) > 3 {
-		return "", "", "", fmt.Errorf("endpoint %q has more parts than host/instance[/token]", raw)
+	if len(parts) > 4 {
+		return "", "", "", "", fmt.Errorf("endpoint %q has more parts than %s", raw, shape)
 	}
 
 	host := parts[0]
@@ -160,11 +166,28 @@ func parseEndpoint(raw string) (base, instance, token string, _ error) {
 		host = net.JoinHostPort(strings.Trim(host, "[]"), DefaultAPIPort)
 	}
 
-	if len(parts) == 3 {
-		token = parts[2]
+	// Both trailing parts are optional, so what one of them is cannot be read
+	// off its position: a pin says what it is, and anything else is the token.
+	// Guessing from shape instead would read a token of the wrong length as a
+	// pin and fail the handshake, which says nothing about the real mistake.
+	for _, part := range parts[2:] {
+		switch {
+		case pin.Written(part):
+			if hubPin != "" {
+				return "", "", "", "", fmt.Errorf("endpoint %q carries two pins", raw)
+			}
+			if _, err := pin.Parse(part); err != nil {
+				return "", "", "", "", fmt.Errorf("endpoint %q: %w", raw, err)
+			}
+			hubPin = part
+		case token != "":
+			return "", "", "", "", fmt.Errorf("endpoint %q has more parts than %s", raw, shape)
+		default:
+			token = part
+		}
 	}
 
-	return "https://" + host, parts[1], token, nil
+	return "https://" + host, parts[1], token, hubPin, nil
 }
 
 func envList(name string) []string {

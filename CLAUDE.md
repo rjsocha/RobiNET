@@ -36,3 +36,18 @@ variant/            per group build configuration, not in git
 ```
 
 Nebula is an ordinary module dependency. There is no fork and no patch set.
+
+## Known and not ours
+
+`make race` fails on `TestSharedTokenRotation` with a data race in
+`nebula/overlay/tun_disabled.go`, `Close()` against `Read()`, reached through
+`hub.Delete` stopping a lighthouse. It is upstream, it predates this repository's
+current state, and nothing here will fix it: patching nebula is not a thing this
+project does. Confirm it is still that one and move on. Do not report it as a
+finding and do not investigate it again.
+
+Searched on 2026-08-11: no issue or pull request upstream mentions it, and
+nebula's master carries the same unsynchronized `t.read = nil` as v1.11.0.
+Nobody else hits it because reaching it needs `tun.disabled` and a
+`Control.Stop()` on a live process, which is the hub's lighthouse lifecycle and
+nothing else.

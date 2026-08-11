@@ -159,7 +159,7 @@ by whoever owns it.`,
 	f.StringVar(&sshFinger, "ssh-fingerprint", "", "pick one key out of the agent, as SHA256:...")
 	f.StringVar(&state, "state", "", "state file (default is under your home)")
 	f.BoolVar(&insecure, "insecure", false, "skip verification of the hub's TLS certificate")
-	f.StringVar(&hubPin, "pin", "", "verify the hub against this public key hash instead, as sha256/BASE64")
+	f.StringVar(&hubPin, "pin", "", "verify the hub against this public key hash instead, as SHA256:BASE64URL")
 	f.StringVar(&logLevel, "log", "info", "log level")
 
 	return cmd

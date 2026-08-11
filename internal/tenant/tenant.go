@@ -546,13 +546,12 @@ func (d *Daemon) SetToken(ctx context.Context, ref, token string) (*TokenResult,
 
 	d.log.Info("shared token replaced", "instance", owned.Name)
 
-	var hubURL string
-	d.state.Read(func(s *data) { hubURL = s.HubURL })
+	hubURL, hubPin := d.hubAddress()
 
 	return &TokenResult{
 		Instance: owned.Name,
 		Token:    token,
-		Endpoint: shorthandEndpoint(hubURL, owned.Name, token),
+		Endpoint: shorthandEndpoint(hubURL, owned.Name, token, hubPin),
 	}, nil
 }
 
