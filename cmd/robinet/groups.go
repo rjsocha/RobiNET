@@ -34,6 +34,7 @@ to one somebody else owns to reach theirs.`,
 		newAttachCmd(),
 		newDeleteCmd(),
 		newDetachCmd(),
+		newInstanceTokenCmd(),
 	)
 
 	return cmd
@@ -99,6 +100,7 @@ signing key lives.`,
 		newDecisionCmd("reject", "Refuse a pending applicant"),
 		newDecisionCmd("forget", "Stop showing a request"),
 		newBanCmd(),
+		newUnbanCmd(),
 		newRemoveMemberCmd(),
 		newMemberListCmd(),
 	)
@@ -215,7 +217,7 @@ func newMemberListCmd() *cobra.Command {
 
 			for _, m := range members {
 				state := "ok"
-				if m.Member.Banned {
+				if m.Member.Banned() {
 					state = "banned"
 				}
 
@@ -243,6 +245,47 @@ func newMemberListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&instance, "instance", "", "only the members of this instance")
 	_ = cmd.RegisterFlagCompletionFunc("instance", completeInstances(socket, true))
 
+	return cmd
+}
+
+// newInstanceTokenCmd replaces the secret a connector's enrollment is
+// authenticated with.
+func newInstanceTokenCmd() *cobra.Command {
+	var socket, token string
+
+	cmd := &cobra.Command{
+		Use:   "token <id or name>",
+		Short: "Replace the shared token new connectors enroll with",
+		Long: `token gives an instance a new shared token and prints the connector
+endpoint carrying it. One is generated unless --token says otherwise.
+
+Only enrollment is authenticated with it. A connector already admitted holds a
+certificate and never presents the token again, so nothing running is
+interrupted; what stops working is every connector configuration handed out
+before this, which is the point.`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeInstances(socket, true),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := socketPath(socket)
+			if err != nil {
+				return err
+			}
+
+			var result tenant.TokenResult
+			req := tenant.TokenRequest{Instance: args[0], Token: token}
+			if err := newControl(path).do(cmd.Context(), http.MethodPost, "/instance/token", req, &result); err != nil {
+				return err
+			}
+
+			fmt.Printf("%s has a new shared token, and the endpoints handed out before it no longer enroll\n",
+				result.Instance)
+			printConnectorHint(result.Endpoint)
+			return nil
+		},
+	}
+
+	addSocketFlag(cmd, &socket)
+	cmd.Flags().StringVar(&token, "token", "", "use this token instead of a generated one")
 	return cmd
 }
 

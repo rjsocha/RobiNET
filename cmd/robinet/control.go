@@ -680,23 +680,27 @@ func newDecisionCmd(action, short string) *cobra.Command {
 	return cmd
 }
 
-// newRemoveMemberCmd forgets a member that is gone, which a ban does not do:
-// a ban keeps it so its certificate stays refused.
+// newRemoveMemberCmd is the end of the line for a member, and it only follows
+// a ban.
 func newRemoveMemberCmd() *cobra.Command {
-	var socket string
+	var socket, instance string
 
 	cmd := &cobra.Command{
 		Use:   "remove <name or fingerprint>",
-		Short: "Forget a member and free its address",
-		Long: `remove forgets a member: its record, its address, and the request it
-arrived with.
+		Short: "Forget a banned member and burn its credentials",
+		Long: `remove forgets a member: its record, the decisions taken about it, its
+address, and the request it arrived with. Its name and its address are free
+again for whatever comes next.
 
-For a member that is gone - a container deleted along with the key it held -
-rather than one to be kept out. A ban is the other thing, and it keeps the
-member on purpose, so its certificate stays on every blocklist. Removing a
-banned member would quietly let it back in, so that is refused.
+Only a banned member can be removed. A certificate cannot be revoked, so a
+member that is not banned still holds a good one for the address this frees,
+and the next member admitted would be handed an address something is already
+using. Ban it first, and the ban is what keeps it out.
 
-Nothing about the certificate changes here: it stays valid until it expires.`,
+Its key and its certificate are burned on the way out: the certificate stays
+on every blocklist, and an enrollment from that key is refused by the hub
+without being put in front of you. Nothing takes either off again, so the same
+machine comes back only with a new key.`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeMembers(socket),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -706,27 +710,43 @@ Nothing about the certificate changes here: it stays valid until it expires.`,
 			}
 
 			var entry tenant.MemberEntry
-			req := tenant.BanRequest{Member: args[0]}
+			req := tenant.BanRequest{Member: args[0], Instance: instance}
 			if err := newControl(path).do(cmd.Context(), http.MethodPost, "/member/remove", req, &entry); err != nil {
 				return err
 			}
 
-			fmt.Printf("removed %s from %s, and %s is free again\n",
+			fmt.Printf("removed %s from %s, its credentials are burned, and %s is free again\n",
 				dashIfEmpty(entry.Member.Name), entry.Instance, entry.Member.Address)
 			return nil
 		},
 	}
 
 	addSocketFlag(cmd, &socket)
+	addMemberInstanceFlag(cmd, &socket, &instance)
 	return cmd
 }
 
+// addMemberInstanceFlag settles which instance is meant. A member's name is
+// unique inside one and nowhere else, so two instances this machine owns can
+// both hold a "railway", and a command given only the name is refused rather
+// than guessing.
+func addMemberInstanceFlag(cmd *cobra.Command, socket, instance *string) {
+	cmd.Flags().StringVar(instance, "instance", "", "which instance the member is in, when the name means more than one")
+	_ = cmd.RegisterFlagCompletionFunc("instance", completeInstances(*socket, true))
+}
+
 func newBanCmd() *cobra.Command {
-	var socket string
+	var socket, note, instance string
 
 	cmd := &cobra.Command{
-		Use:               "ban <name or fingerprint>",
-		Short:             "Blocklist a member and drop its routes",
+		Use:   "ban <name or fingerprint>",
+		Short: "Blocklist a member and drop its routes",
+		Long: `ban keeps a member out without forgetting it. Its certificate goes onto
+every blocklist and its routes leave the table, but the member stays, holding
+its name and its address, and unban lets it back in.
+
+The note is kept with the decision and it is the only place the reason for it
+survives.`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeMembers(socket),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -735,7 +755,7 @@ func newBanCmd() *cobra.Command {
 				return err
 			}
 
-			req := tenant.BanRequest{Member: args[0]}
+			req := tenant.BanRequest{Member: args[0], Note: note, Instance: instance}
 			if err := newControl(path).do(cmd.Context(), http.MethodPost, "/ban", req, nil); err != nil {
 				return err
 			}
@@ -746,6 +766,43 @@ func newBanCmd() *cobra.Command {
 	}
 
 	addSocketFlag(cmd, &socket)
+	cmd.Flags().StringVar(&note, "note", "", "why, kept with the decision")
+	addMemberInstanceFlag(cmd, &socket, &instance)
+	return cmd
+}
+
+func newUnbanCmd() *cobra.Command {
+	var socket, note, instance string
+
+	cmd := &cobra.Command{
+		Use:   "unban <name or fingerprint>",
+		Short: "Let a banned member back in",
+		Long: `unban takes a member's certificate off every blocklist and puts its routes
+back in the table.
+
+Nothing is reissued: the certificate was never revoked, because it cannot be,
+and it starts working again the moment everybody stops refusing it.`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeMembers(socket),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := socketPath(socket)
+			if err != nil {
+				return err
+			}
+
+			req := tenant.BanRequest{Member: args[0], Note: note, Instance: instance}
+			if err := newControl(path).do(cmd.Context(), http.MethodPost, "/unban", req, nil); err != nil {
+				return err
+			}
+
+			fmt.Printf("unbanned %s, its certificate works again and its routes are back\n", args[0])
+			return nil
+		},
+	}
+
+	addSocketFlag(cmd, &socket)
+	cmd.Flags().StringVar(&note, "note", "", "why, kept with the decision")
+	addMemberInstanceFlag(cmd, &socket, &instance)
 	return cmd
 }
 

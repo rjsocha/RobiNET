@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -503,6 +504,63 @@ func (d *Daemon) Show(ctx context.Context, wanted string) (map[string]any, error
 	return nil, fmt.Errorf("no instance %q on this hub", wanted)
 }
 
+// TokenResult is a replaced shared token and where it has to be pasted.
+type TokenResult struct {
+	Instance string `json:"instance"`
+	Token    string `json:"token"`
+	Endpoint string `json:"endpoint"`
+}
+
+// SetToken replaces the shared token of an instance this machine owns.
+//
+// It gates enrollment and nothing else, so every connector already admitted
+// keeps working and every connector configuration handed out before this stops
+// being usable for a new one.
+func (d *Daemon) SetToken(ctx context.Context, ref, token string) (*TokenResult, error) {
+	var owned *Owned
+	for _, o := range d.owned() {
+		if o.InstanceID == ref || strings.EqualFold(o.Name, ref) || strings.HasPrefix(o.InstanceID, ref) {
+			owned = o
+			break
+		}
+	}
+	if owned == nil {
+		return nil, fmt.Errorf("this machine does not own %s", ref)
+	}
+
+	if token == "" {
+		token = newSharedToken()
+	}
+
+	if err := d.hub.setToken(ctx, owned.InstanceID, token); err != nil {
+		return nil, err
+	}
+
+	// The hub took it, so this machine has to agree: the endpoint it prints for
+	// this instance is rendered from here, and one that still carries the old
+	// token would be handed out and refused.
+	err := d.state.Write(func(s *data) error {
+		if stored, ok := s.Owned[owned.InstanceID]; ok {
+			stored.SharedToken = token
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	d.log.Info("shared token replaced", "instance", owned.Name)
+
+	var hubURL string
+	d.state.Read(func(s *data) { hubURL = s.HubURL })
+
+	return &TokenResult{
+		Instance: owned.Name,
+		Token:    token,
+		Endpoint: shorthandEndpoint(hubURL, owned.Name, token),
+	}, nil
+}
+
 func tokenOf(owned *Owned) string {
 	if owned == nil {
 		return ""
@@ -729,23 +787,90 @@ func (d *Daemon) Disconnect(ref string) error {
 }
 
 // RemoveMember forgets a member of an instance this machine owns.
-func (d *Daemon) RemoveMember(ctx context.Context, ref string) (*MemberEntry, error) {
+func (d *Daemon) RemoveMember(ctx context.Context, req BanRequest) (*MemberEntry, error) {
+	found, err := d.findMember(ctx, req.Member, req.Instance)
+	if err != nil {
+		return nil, err
+	}
+
+	member, err := d.hub.removeMember(ctx, found.owned.InstanceID, found.member.Fingerprint)
+	if err != nil {
+		return nil, err
+	}
+
+	d.log.Info("member removed", "instance", found.owned.Name, "member", member.Name)
+
+	return &MemberEntry{
+		Instance:   found.owned.Name,
+		InstanceID: found.owned.InstanceID,
+		Member:     member,
+	}, nil
+}
+
+// ownedMember is one member, and the instance this machine owns it in.
+type ownedMember struct {
+	owned  *Owned
+	member *hub.Member
+}
+
+// findMember resolves a member across the instances this machine owns.
+//
+// A name is unique inside an instance and nowhere else, so two of them can both
+// hold a "railway". Instances are walked in map order, which is no order at
+// all, so acting on whichever turned up first is not a tie-break: it is a coin
+// toss with somebody's network. An ambiguous name is refused and named.
+func (d *Daemon) findMember(ctx context.Context, ref, instance string) (*ownedMember, error) {
+	if ref == "" {
+		return nil, fmt.Errorf("no member named")
+	}
+
+	var (
+		found  []ownedMember
+		unread error
+	)
+
 	for _, owned := range d.owned() {
-		member, err := d.hub.removeMember(ctx, owned.InstanceID, ref)
-		if err != nil {
+		if instance != "" && !strings.EqualFold(owned.Name, instance) && owned.InstanceID != instance {
 			continue
 		}
 
-		d.log.Info("member removed", "instance", owned.Name, "member", member.Name)
+		members, err := d.hub.members(ctx, owned.InstanceID)
+		if err != nil {
+			// Kept rather than returned: one unreadable instance should not
+			// stop a member being found in another, but it must not turn into
+			// "no such member" either.
+			unread = err
+			continue
+		}
 
-		return &MemberEntry{
-			Instance:   owned.Name,
-			InstanceID: owned.InstanceID,
-			Member:     member,
-		}, nil
+		for _, m := range members {
+			if m.Name == ref || strings.HasPrefix(m.Fingerprint, ref) {
+				found = append(found, ownedMember{owned: owned, member: m})
+			}
+		}
 	}
 
-	return nil, fmt.Errorf("no member %s in any instance this machine owns", ref)
+	switch len(found) {
+	case 1:
+		return &found[0], nil
+	case 0:
+		if unread != nil {
+			return nil, unread
+		}
+		if instance != "" {
+			return nil, fmt.Errorf("no member %s in %s", ref, instance)
+		}
+		return nil, fmt.Errorf("no member %s in any instance this machine owns", ref)
+	}
+
+	where := make([]string, 0, len(found))
+	for _, f := range found {
+		where = append(where, f.owned.Name)
+	}
+	sort.Strings(where)
+
+	return nil, fmt.Errorf("%s is a member of %s: say which with --instance",
+		ref, strings.Join(where, " and "))
 }
 
 // MemberEntry is one admitted member, with the instance it belongs to.
@@ -961,15 +1086,35 @@ func (d *Daemon) Forget(ctx context.Context, requestID string) error {
 
 // Ban blocklists a member of an instance this machine owns, which takes its
 // routes out of the table for everybody at the same time.
-func (d *Daemon) Ban(ctx context.Context, member string) error {
-	for _, owned := range d.owned() {
-		if err := d.hub.ban(ctx, owned.InstanceID, member); err == nil {
-			d.log.Info("banned", "instance", owned.Name, "member", member)
-			return nil
-		}
+func (d *Daemon) Ban(ctx context.Context, req BanRequest) error {
+	found, err := d.findMember(ctx, req.Member, req.Instance)
+	if err != nil {
+		return err
 	}
 
-	return fmt.Errorf("no member %s in any instance this machine owns", member)
+	if err := d.hub.ban(ctx, found.owned.InstanceID, found.member.Fingerprint, req.Note); err != nil {
+		return err
+	}
+
+	d.log.Info("banned", "instance", found.owned.Name, "member", found.member.Name, "note", req.Note)
+
+	return nil
+}
+
+// Unban lets a banned member of an instance this machine owns back in.
+func (d *Daemon) Unban(ctx context.Context, req BanRequest) error {
+	found, err := d.findMember(ctx, req.Member, req.Instance)
+	if err != nil {
+		return err
+	}
+
+	if err := d.hub.unban(ctx, found.owned.InstanceID, found.member.Fingerprint, req.Note); err != nil {
+		return err
+	}
+
+	d.log.Info("unbanned", "instance", found.owned.Name, "member", found.member.Name, "note", req.Note)
+
+	return nil
 }
 
 // findPending resolves a request by id or by its first characters.

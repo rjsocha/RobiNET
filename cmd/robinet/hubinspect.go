@@ -111,7 +111,7 @@ func newHubShowCmd(configPath *string, configDirs *[]string) *cobra.Command {
 				fmt.Fprintln(w, "  KIND\tNAME\tADDRESS\tADDRESS6\tROUTES\tDOMAINS\tSTATE\tJOINED")
 				for _, m := range sortedMembers(inst) {
 					state := "ok"
-					if m.Banned {
+					if m.Banned() {
 						state = "banned"
 					}
 					fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
@@ -247,7 +247,7 @@ func newHubMembersCmd(configPath *string, configDirs *[]string) *cobra.Command {
 					}
 
 					state := "ok"
-					if m.Banned {
+					if m.Banned() {
 						state = "banned"
 					}
 

@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -232,9 +233,16 @@ func TestSharedInstance(t *testing.T) {
 		t.Fatal("an instance with members was deleted without --force")
 	}
 
+	// Removing a member that is not banned is refused: its certificate stays
+	// good for the address that would be freed, and the next member admitted
+	// would be handed an address something is already using.
+	if _, err := robert.RemoveMember(ctx, BanRequest{Member: "railway"}); err == nil {
+		t.Fatal("a member that was not banned was removed, freeing an address its certificate still covers")
+	}
+
 	// Banning the connector takes the route away from everybody at once,
 	// without reissuing anything.
-	if err := robert.Ban(ctx, "railway"); err != nil {
+	if err := robert.Ban(ctx, BanRequest{Member: "railway", Note: "suspected"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -245,11 +253,56 @@ func TestSharedInstance(t *testing.T) {
 	if len(jacekTable.Routes) != 0 {
 		t.Fatalf("a banned connector still carries %v", jacekTable.Routes)
 	}
+	if len(jacekTable.Blocked) != 1 {
+		t.Fatalf("a ban put %d certificates on the blocklist, want one", len(jacekTable.Blocked))
+	}
+	blockedByBan := jacekTable.Blocked[0]
 
-	// A banned member stays, because that is where its certificate is refused
-	// from. Forgetting one would quietly let it back in.
-	if _, err := robert.RemoveMember(ctx, "railway"); err == nil {
-		t.Fatal("a banned member was removed, taking it off every blocklist")
+	// And unbanning puts it back, without anything being reissued.
+	if err := robert.Unban(ctx, BanRequest{Member: "railway", Note: "cleared"}); err != nil {
+		t.Fatal(err)
+	}
+	jacekTable, err = jacek.hub.routes(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jacekTable.Routes) != 2 || len(jacekTable.Blocked) != 0 {
+		t.Fatalf("after unbanning, %d routes and %d blocked", len(jacekTable.Routes), len(jacekTable.Blocked))
+	}
+
+	// Banned again and then removed: the record goes, and the certificate stays
+	// refused by everybody. Losing the blocklist entry along with the record is
+	// what removing a banned member used to be refused for.
+	if err := robert.Ban(ctx, BanRequest{Member: "railway", Note: "no answer"}); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := robert.RemoveMember(ctx, BanRequest{Member: "railway"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jacekTable, err = jacek.hub.routes(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jacekTable.Blocked) != 1 || jacekTable.Blocked[0] != blockedByBan {
+		t.Fatalf("removing a banned member left %v on the blocklist, want %s", jacekTable.Blocked, blockedByBan)
+	}
+
+	members, err := robert.Members(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range members {
+		if m.Member.Fingerprint == removed.Member.Fingerprint {
+			t.Fatal("a removed member is still listed")
+		}
+	}
+
+	// Its key is burned too, so the same machine asking again is refused by the
+	// hub rather than put in front of the owner a second time.
+	if code := enrollStatus(t, srv.URL, created.ID, req, req.MAC("shared")); code < 300 {
+		t.Fatalf("a removed member enrolled again and got %d", code)
 	}
 
 	// The owner deletes it, and it is gone for everybody.
@@ -261,6 +314,182 @@ func TestSharedInstance(t *testing.T) {
 	}
 	if _, ok := robert.state.Owned(created.ID); ok {
 		t.Fatal("the authority survived the deletion")
+	}
+}
+
+// TestAmbiguousMemberName covers what a name is and is not. It is unique inside
+// one instance, and instances are walked in map order, so a name held in two of
+// them would otherwise pick one of them at random.
+func TestAmbiguousMemberName(t *testing.T) {
+	dir := t.TempDir()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	robertKey := testKey(t)
+
+	h, err := hub.New(hub.Config{
+		NebulaBind:     "127.0.0.1",
+		PublicEndpoint: "127.0.0.1",
+		PortMin:        21200,
+		PortMax:        21210,
+		Overlays: []hub.Pool{
+			{Prefix: netip.MustParsePrefix("198.19.204.0/22"), Size: 24},
+		},
+		Token:     "hub-token",
+		Binders:   hub.Binders{"robert": {Keys: []ssh.PublicKey{robertKey.PublicKey()}}},
+		StatePath: filepath.Join(dir, "hub.json"),
+		MTU:       1500,
+		Logger:    log,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+
+	srv := httptest.NewServer(h.Handler())
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	robert := daemonFor(t, ctx, dir, "robert", srv.URL, robertKey, log)
+
+	// Two instances of his own, each with a connector called "railway": one
+	// name, two members, and nothing about the name says which.
+	for _, name := range []string{"first", "second"} {
+		created, _, err := robert.Create(ctx, name, "shared")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		key, _, err := ca.GenerateHostKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := enroll.Request{
+			PublicKey: string(key),
+			Name:      "railway",
+			Routes:    []netip.Prefix{netip.MustParsePrefix("10.128.0.0/9")},
+		}
+		requestID := postEnroll(t, srv.URL, created.ID, req, req.MAC("shared"))
+		if _, err := robert.Approve(ctx, requestID, nil, nil, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err = robert.Ban(ctx, BanRequest{Member: "railway", Note: "which one"})
+	if err == nil {
+		t.Fatal("a name held by two instances was banned in whichever came first")
+	}
+	if !strings.Contains(err.Error(), "--instance") {
+		t.Fatalf("the refusal does not say how to resolve it: %s", err)
+	}
+
+	// Named, it is not ambiguous at all.
+	if err := robert.Ban(ctx, BanRequest{Member: "railway", Instance: "second"}); err != nil {
+		t.Fatal(err)
+	}
+
+	members, err := robert.Members(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range members {
+		if m.Member.Kind != hub.KindConnector {
+			continue
+		}
+		if want := m.Instance == "second"; m.Member.Banned() != want {
+			t.Fatalf("the connector in %s is banned=%v", m.Instance, m.Member.Banned())
+		}
+	}
+}
+
+// TestSharedTokenRotation covers what replacing a token does and, more to the
+// point, what it does not: enrollment is the only thing authenticated with it,
+// so an admitted connector is untouched.
+func TestSharedTokenRotation(t *testing.T) {
+	dir := t.TempDir()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	robertKey := testKey(t)
+
+	h, err := hub.New(hub.Config{
+		NebulaBind:     "127.0.0.1",
+		PublicEndpoint: "127.0.0.1",
+		PortMin:        21300,
+		PortMax:        21310,
+		Overlays: []hub.Pool{
+			{Prefix: netip.MustParsePrefix("198.19.208.0/22"), Size: 24},
+		},
+		Token:     "hub-token",
+		Binders:   hub.Binders{"robert": {Keys: []ssh.PublicKey{robertKey.PublicKey()}}},
+		StatePath: filepath.Join(dir, "hub.json"),
+		MTU:       1500,
+		Logger:    log,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+
+	srv := httptest.NewServer(h.Handler())
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	robert := daemonFor(t, ctx, dir, "robert", srv.URL, robertKey, log)
+
+	created, _, err := robert.Create(ctx, "railway-prod", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	admittedKey, _, err := ca.GenerateHostKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted := enroll.Request{PublicKey: string(admittedKey), Name: "already-in"}
+	requestID := postEnroll(t, srv.URL, created.ID, admitted, admitted.MAC("first"))
+	if _, err := robert.Approve(ctx, requestID, nil, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := robert.SetToken(ctx, "railway-prod", "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(result.Endpoint, "/second") {
+		t.Fatalf("the endpoint to hand out is %s, and does not carry the new token", result.Endpoint)
+	}
+
+	// The one already inside is untouched: it holds a certificate and never
+	// presents a token again.
+	members, err := robert.Members(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range members {
+		if m.Member.Name == "already-in" && !m.Member.Banned() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("replacing the token disturbed a member that was already admitted")
+	}
+
+	// A new connector with the endpoint handed out before is turned away.
+	nextKey, _, err := ca.GenerateHostKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := enroll.Request{PublicKey: string(nextKey), Name: "later"}
+
+	if code := enrollStatus(t, srv.URL, created.ID, next, next.MAC("first")); code < 300 {
+		t.Fatalf("the old token still enrolled and got %d", code)
+	}
+	if code := enrollStatus(t, srv.URL, created.ID, next, next.MAC("second")); code >= 300 {
+		t.Fatalf("the new token was refused with %d", code)
 	}
 }
 
@@ -288,6 +517,32 @@ func daemonFor(t *testing.T, ctx context.Context, dir, name, hubURL string, key 
 		t.Fatal(err)
 	}
 	return d
+}
+
+// enrollStatus posts an enrollment and reports the status, for the cases where
+// being turned away is the thing under test.
+func enrollStatus(t *testing.T, base, instance string, req enroll.Request, mac string) int {
+	t.Helper()
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	httpReq, err := http.NewRequest(http.MethodPost, base+"/v1/enroll/"+instance, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set(enroll.MACHeader, mac)
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode
 }
 
 func postEnroll(t *testing.T, base, instance string, req enroll.Request, mac string) string {

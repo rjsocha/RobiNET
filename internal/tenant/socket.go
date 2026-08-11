@@ -122,7 +122,9 @@ func (d *Daemon) Serve(ctx context.Context, path string) error {
 	mux.HandleFunc("POST /reject", d.handleReject)
 	mux.HandleFunc("POST /forget", d.handleForget)
 	mux.HandleFunc("POST /ban", d.handleBan)
+	mux.HandleFunc("POST /unban", d.handleUnban)
 	mux.HandleFunc("POST /member/remove", d.handleRemoveMember)
+	mux.HandleFunc("POST /instance/token", d.handleSetToken)
 	mux.HandleFunc("POST /restart", d.handleRestart)
 	mux.HandleFunc("POST /families", d.handleFamilies)
 	if variant.Cheating() {
@@ -215,6 +217,29 @@ func (d *Daemon) handleDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// TokenRequest replaces the shared token of an instance this machine owns. An
+// empty token means one is generated here.
+type TokenRequest struct {
+	Instance string `json:"instance"`
+	Token    string `json:"token,omitempty"`
+}
+
+func (d *Daemon) handleSetToken(w http.ResponseWriter, r *http.Request) {
+	var req TokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	result, err := d.SetToken(r.Context(), req.Instance, req.Token)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 // InboundRequest changes what members may reach here.
 type InboundRequest struct {
 	Inbound string `json:"inbound"`
@@ -246,7 +271,7 @@ func (d *Daemon) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := d.RemoveMember(r.Context(), req.Member)
+	entry, err := d.RemoveMember(r.Context(), req)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -643,9 +668,15 @@ func (d *Daemon) handleForget(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// BanRequest names a member to blocklist.
+// BanRequest names a member to blocklist, to let back in, or to remove, and
+// says why. A removal takes no note: nothing survives it to carry one.
 type BanRequest struct {
 	Member string `json:"member"`
+	Note   string `json:"note,omitempty"`
+
+	// Instance settles which one is meant when the name belongs to a member of
+	// more than one instance this machine owns.
+	Instance string `json:"instance,omitempty"`
 }
 
 func (d *Daemon) handleBan(w http.ResponseWriter, r *http.Request) {
@@ -655,7 +686,22 @@ func (d *Daemon) handleBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := d.Ban(r.Context(), req.Member); err != nil {
+	if err := d.Ban(r.Context(), req); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (d *Daemon) handleUnban(w http.ResponseWriter, r *http.Request) {
+	var req BanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	if err := d.Unban(r.Context(), req); err != nil {
 		writeError(w, err)
 		return
 	}

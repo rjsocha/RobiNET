@@ -42,6 +42,8 @@ func (h *Hub) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/instances/{id}/requests/{rid}", h.ownerOnly(h.handleDecision))
 	mux.HandleFunc("DELETE /v1/instances/{id}/requests/{rid}", h.ownerOnly(h.handleForget))
 	mux.HandleFunc("POST /v1/instances/{id}/ban", h.ownerOnly(h.handleBan))
+	mux.HandleFunc("POST /v1/instances/{id}/unban", h.ownerOnly(h.handleUnban))
+	mux.HandleFunc("POST /v1/instances/{id}/token", h.ownerOnly(h.handleSetToken))
 	mux.HandleFunc("DELETE /v1/instances/{id}", h.ownerOnly(h.handleDeleteInstance))
 	mux.HandleFunc("DELETE /v1/instances/{id}/members/{member}", h.ownerOnly(h.handleRemoveMember))
 
@@ -308,7 +310,7 @@ func (h *Hub) handleListInstances(w http.ResponseWriter, r *http.Request, who *R
 func (h *Hub) handleRemoveMember(w http.ResponseWriter, r *http.Request, inst *Instance, _ *Registration) {
 	member, err := h.RemoveMember(inst.ID, r.PathValue("member"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		writeMemberError(w, err)
 		return
 	}
 
@@ -381,9 +383,12 @@ func (h *Hub) handleForget(w http.ResponseWriter, r *http.Request, inst *Instanc
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// BanRequest names a member to blocklist.
+// BanRequest names a member to blocklist, or to let back in, and says why.
 type BanRequest struct {
 	Member string `json:"member"`
+
+	// Note is the reason, kept with the decision. Nothing else will remember it.
+	Note string `json:"note,omitempty"`
 }
 
 func (h *Hub) handleBan(w http.ResponseWriter, r *http.Request, inst *Instance, _ *Registration) {
@@ -392,12 +397,64 @@ func (h *Hub) handleBan(w http.ResponseWriter, r *http.Request, inst *Instance, 
 		return
 	}
 
-	if err := h.Ban(inst.ID, req.Member); err != nil {
-		writeError(w, http.StatusNotFound, "not_found", err.Error())
+	if err := h.Ban(inst.ID, req.Member, req.Note); err != nil {
+		writeMemberError(w, err)
 		return
 	}
 
-	h.log.Info("member banned", "instance", inst.Name, "member", req.Member)
+	h.log.Info("member banned", "instance", inst.Name, "member", req.Member, "note", req.Note)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Hub) handleUnban(w http.ResponseWriter, r *http.Request, inst *Instance, _ *Registration) {
+	var req BanRequest
+	if !decode(w, r, &req) {
+		return
+	}
+
+	if err := h.Unban(inst.ID, req.Member, req.Note); err != nil {
+		writeMemberError(w, err)
+		return
+	}
+
+	h.log.Info("member unbanned", "instance", inst.Name, "member", req.Member, "note", req.Note)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeMemberError separates "this instance does not have that member" from
+// "it does, and this is refused".
+//
+// The caller walks every instance it owns looking for the member, so it has to
+// be able to tell the two apart. Reporting a refusal as a miss made it walk
+// past the answer and say the member did not exist anywhere.
+func writeMemberError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+	writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+}
+
+// TokenRequest replaces the secret new connector enrollments are authenticated
+// with.
+type TokenRequest struct {
+	SharedToken string `json:"shared_token"`
+}
+
+func (h *Hub) handleSetToken(w http.ResponseWriter, r *http.Request, inst *Instance, _ *Registration) {
+	var req TokenRequest
+	if !decode(w, r, &req) {
+		return
+	}
+
+	if err := h.SetSharedToken(inst.ID, req.SharedToken); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+
+	// The token itself is never logged: it is the whole of what authenticates
+	// an enrollment, and a log is read by more people than an instance is.
+	h.log.Info("shared token replaced", "instance", inst.Name)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -195,9 +195,21 @@ func (c *hubClient) forget(ctx context.Context, instance, requestID string) erro
 }
 
 // ban blocklists a member of an instance we own.
-func (c *hubClient) ban(ctx context.Context, instance, member string) error {
+func (c *hubClient) ban(ctx context.Context, instance, member, note string) error {
 	return c.do(ctx, http.MethodPost, "/v1/instances/"+instance+"/ban",
-		hub.BanRequest{Member: member}, nil)
+		hub.BanRequest{Member: member, Note: note}, nil)
+}
+
+// unban lets one back in.
+func (c *hubClient) unban(ctx context.Context, instance, member, note string) error {
+	return c.do(ctx, http.MethodPost, "/v1/instances/"+instance+"/unban",
+		hub.BanRequest{Member: member, Note: note}, nil)
+}
+
+// setToken replaces the secret new enrollments are authenticated with.
+func (c *hubClient) setToken(ctx context.Context, instance, token string) error {
+	return c.do(ctx, http.MethodPost, "/v1/instances/"+instance+"/token",
+		hub.TokenRequest{SharedToken: token}, nil)
 }
 
 // join asks to be let into an instance somebody else owns.

@@ -84,8 +84,53 @@ type Member struct {
 
 	CertFingerprint string `json:"cert_fingerprint,omitempty"`
 
-	Banned   bool      `json:"banned,omitempty"`
+	// Events are the decisions taken about this member, in the order they were
+	// taken. The current state is the last one, so a ban after an unban after a
+	// ban needs nothing reconciled: there is no second place recording whether
+	// this member is blocked, only the end of this list.
+	Events []MemberEvent `json:"events,omitempty"`
+
 	JoinedAt time.Time `json:"joined_at"`
+}
+
+// Kinds of decision recorded against a member.
+const (
+	EventBan   = "ban"
+	EventUnban = "unban"
+)
+
+// MemberEvent is one decision about a member, with the reason it was taken.
+//
+// The note is the only place the reason survives. A fingerprint six months old
+// says nothing about why somebody was shut out, and the moment of the decision
+// is the only moment anybody knows.
+type MemberEvent struct {
+	Kind string    `json:"kind"`
+	Note string    `json:"note,omitempty"`
+	At   time.Time `json:"at"`
+}
+
+// Banned reports whether the last decision taken about this member was a ban.
+func (m *Member) Banned() bool {
+	if len(m.Events) == 0 {
+		return false
+	}
+	return m.Events[len(m.Events)-1].Kind == EventBan
+}
+
+// Burned is a credential that will never be admitted to this instance again.
+//
+// It outlives the member it belonged to, which is the whole point: removing a
+// member frees its name and its address, and without this the certificate it
+// still holds would come off every blocklist at the same moment.
+type Burned struct {
+	// Fingerprint of the nebula public key. An enrollment carrying it is
+	// refused by the hub without troubling the owner.
+	Fingerprint string `json:"fingerprint"`
+
+	// CertFingerprint is what goes onto every member's blocklist. Empty for a
+	// member that was removed before it was ever issued a certificate.
+	CertFingerprint string `json:"cert_fingerprint,omitempty"`
 }
 
 // Instance is one mesh: its own authority, its own overlay prefix, its own
@@ -136,6 +181,10 @@ type Instance struct {
 
 	// Members are everyone admitted, keyed by nebula key fingerprint.
 	Members map[string]*Member `json:"members,omitempty"`
+
+	// Burned are the credentials of removed members. Nothing takes anything off
+	// this list.
+	Burned []Burned `json:"burned,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -213,7 +262,7 @@ func (inst *Instance) MemberOf(identity string) (*Member, bool) {
 	}
 
 	for _, m := range inst.Members {
-		if m.Identity == identity && !m.Banned {
+		if m.Identity == identity && !m.Banned() {
 			return m, true
 		}
 	}

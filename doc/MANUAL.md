@@ -88,6 +88,11 @@ token** belongs to the hub and registers a machine; it is what a variant build
 carries and what `robinet join` uses. The **shared token** belongs to one
 instance, is generated when it is created, and is what a connector's enrollment
 is signed with. A connector never sees the registry token.
+
+`robinet instance token <name>` replaces the shared token and prints the new
+endpoint. It gates enrollment and nothing else, so connectors already admitted
+hold certificates and keep running, while every endpoint handed out before it
+stops being able to enroll anything new.
 | `ROBINET_STATE` | state directory; **must** be persistent |
 | `ROBINET_NAME` | label shown to whoever approves |
 | `ROBINET_ANNOUNCE_ROUTES` | prefixes to announce, comma separated |
@@ -142,12 +147,20 @@ under the same name, holding an address.
 
 1. `robinet member pending` - the new one is there, and `WILL BE CALLED` says
    the name it wants, which is the name the old one holds.
-2. `robinet member remove <name>` - forgets the old one and frees its address.
-   Not `ban`: a ban is for keeping something out and deliberately keeps the
-   member so its certificate stays refused.
-3. `robinet member approve <id>` - now that the name is free.
-4. `robinet dns install` - the name space is the same, but the address behind
+2. `robinet member ban <name> --note "redeployed"` - the old one stops being
+   able to reach anybody, which is what has to be true before its address can
+   go to somebody else.
+3. `robinet member remove <name>` - forgets it and frees the name and the
+   address. Only a banned member can be removed, and this burns the old key and
+   the old certificate for good.
+4. `robinet member approve <id>` - now that the name is free.
+5. `robinet dns install` - the name space is the same, but the address behind
    it changed.
+
+The two steps are not ceremony. A certificate cannot be revoked, so the old
+member holds a valid one for its address until it expires, ten years out. Free
+that address without burning the certificate first and the next member admitted
+gets handed an address something else can still use.
 
 ## Task: admit somebody, on an instance this machine owns
 
@@ -164,16 +177,18 @@ waiting for a decision
 | `robinet member approve <id>` | signs a certificate; the applicant connects on its own |
 | `robinet member approve <id> --routes 10.1.0.0/16` | accepts only part of what a connector announced |
 | `robinet member reject <id> --reason "..."` | refuses; a connector that restarts asks again |
-| `robinet member ban <name>` | takes its routes away and puts its certificate on every member's blocklist, so it can no longer reach anybody |
-| `robinet member remove <name>` | forgets a member that is gone and frees its address; refused for a banned one, which has to stay for the blocklist |
+| `robinet member ban <name> --note "..."` | takes its routes away and puts its certificate on every member's blocklist, so it can no longer reach anybody; the member stays, holding its name and its address |
+| `robinet member unban <name> --note "..."` | takes it off every blocklist and puts its routes back; nothing is reissued |
+| `robinet member remove <name>` | forgets a banned member and frees its name and address, burning its key and its certificate for good; refused for one that is not banned |
+| `robinet member ban <name> --instance <instance>` | settles which one is meant; a name is unique inside an instance and nowhere else, so `ban`, `unban` and `remove` refuse a name held in two of them rather than guessing |
 | `robinet member approve <id> --domains a.example` | admits it, accepting only these of the names it announced |
 | `robinet instance delete <name> --force` | removes it from the hub and its authority from here, for good |
+| `robinet instance token <name>` | replaces the shared token; running connectors are unaffected, endpoints handed out before it stop enrolling |
 | `robinet inbound open` | lets members of an instance reach ports on this machine; the default is ping |
 | `robinet reach` | every network this machine can get to, and the name space for each |
 | `robinet dns list` | what the resolver would be told, without changing anything |
 | `robinet dns alias <name> <as>` | answer for a name space under a shorter name here; local, told to nobody |
 | `robinet member forget <id>` | drops the record so it stops appearing |
-| `robinet member ban <name>` | blocklists a member and removes its routes for everybody |
 
 `KIND` is `connector` when it carries routes and `tenant` when it consumes
 them. A tenant is granted no routes to carry, whatever it asked for.
@@ -200,7 +215,10 @@ change no certificate.
 | `only the owner of that instance may do that` | this machine is a member, not the owner | the owner has to act |
 | `this machine does not belong to that instance` | not admitted yet | `robinet instance attach <id>` and wait |
 | `up needs CAP_NET_ADMIN` | started without the capability | `robinet setup` installs a unit that grants exactly that |
-| `a connector is already called <name>` | the one it replaces is still a member, usually after a redeploy with a fresh volume | `robinet member remove <name>`, then approve; or approve with `--name` if both are meant to stay |
+| `a connector is already called <name>` | the one it replaces is still a member, usually after a redeploy with a fresh volume | `robinet member ban <name>` and `robinet member remove <name>`, then approve; or approve with `--name` if both are meant to stay |
+| `<name> is not banned: ban it first` | `remove` frees an address the member still holds a valid certificate for | `robinet member ban <name> --note "..."`, then remove |
+| `<name> is a member of <a> and <b>: say which with --instance` | a name is unique inside an instance and nowhere else | add `--instance <name>`, or use the fingerprint instead |
+| `this key was removed from <instance> and will not be admitted again` | a removed connector is enrolling with the key that was burned when it was removed | give it a new keypair, which for a container means a fresh state volume |
 | `the daemon is running <x> and this command is <y>` | the binary was upgraded, the service still runs the old one | `robinet restart` |
 | `robinet is not configured: ROBINET_ENDPOINT is still CHANGEME` | a template was deployed without being edited | set it to what `robinet instance show` printed |
 | `cannot carry <prefix>: this instance has no address of that family` | the hub has no IPv6 pool, so no certificate can hold an IPv6 route | set `overlays6` on the hub and create a new instance |

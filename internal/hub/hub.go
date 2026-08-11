@@ -308,6 +308,13 @@ func (h *Hub) Enroll(ref string, req enroll.Request, who Applicant) (*Record, er
 			return fmt.Errorf("bad or missing request authentication")
 		}
 
+		// A removed member asking again. Refused here rather than put in front
+		// of the owner, because the decision was already taken and the owner
+		// approving it by reflex is exactly what removal exists to prevent.
+		if inst.burned(fingerprint) {
+			return fmt.Errorf("this key was removed from %s and will not be admitted again", inst.Name)
+		}
+
 		// A connector that re-enrolls with the same key keeps its record, so a
 		// restart does not fill the panel with duplicates.
 		for _, existing := range inst.Requests {
@@ -458,8 +465,8 @@ func (h *Hub) Decide(instanceID, requestID string, d enroll.Decision) error {
 					// with a fresh volume is a new key and a new member, and
 					// the one it replaces is still here under the name it
 					// will never use again.
-					return fmt.Errorf("a %s is already called %s: remove it first with robinet member remove %s, or approve this one with --name",
-						m.Kind, name, name)
+					return fmt.Errorf("a %s is already called %s: retire it first with robinet member ban %s and robinet member remove %s, or approve this one with --name",
+						m.Kind, name, name, name)
 				}
 			}
 
@@ -571,7 +578,7 @@ func routesOf(inst *Instance) []Route {
 	var out []Route
 
 	for _, m := range inst.Members {
-		if m.Kind != KindConnector || m.Banned {
+		if m.Kind != KindConnector || m.Banned() {
 			continue
 		}
 		for _, prefix := range m.Routes {
@@ -595,7 +602,7 @@ func resolversOf(inst *Instance) []Resolver {
 	var out []Resolver
 
 	for _, m := range inst.Members {
-		if m.Kind != KindConnector || m.Banned {
+		if m.Kind != KindConnector || m.Banned() {
 			continue
 		}
 		for _, domain := range m.Domains {
@@ -621,7 +628,7 @@ func resolversOf(inst *Instance) []Resolver {
 func (inst *Instance) MemberCount() int {
 	n := 0
 	for _, m := range inst.Members {
-		if m.Kind != KindOwner && !m.Banned {
+		if m.Kind != KindOwner && !m.Banned() {
 			n++
 		}
 	}
@@ -666,8 +673,16 @@ func blockedIn(inst *Instance) []string {
 	var out []string
 
 	for _, m := range inst.Members {
-		if m.Banned && m.CertFingerprint != "" {
+		if m.Banned() && m.CertFingerprint != "" {
 			out = append(out, m.CertFingerprint)
+		}
+	}
+
+	// A removed member has no record left to carry its ban, and its certificate
+	// is exactly as valid as it was the moment before.
+	for _, b := range inst.Burned {
+		if b.CertFingerprint != "" {
+			out = append(out, b.CertFingerprint)
 		}
 	}
 
@@ -676,86 +691,169 @@ func blockedIn(inst *Instance) []string {
 	return out
 }
 
-// Ban blocklists a member and takes its routes out of the table.
-func (h *Hub) Ban(instanceID, fingerprint string) error {
-	err := h.store.Update(instanceID, func(inst *Instance) error {
-		for fp, m := range inst.Members {
-			if fp == fingerprint || strings.HasPrefix(fp, fingerprint) || m.Name == fingerprint {
-				m.Banned = true
-				return nil
-			}
+// burned reports whether a nebula key has been removed from this instance.
+func (inst *Instance) burned(fingerprint string) bool {
+	for _, b := range inst.Burned {
+		if b.Fingerprint == fingerprint {
+			return true
 		}
-		return fmt.Errorf("no such member: %s", fingerprint)
+	}
+	return false
+}
+
+// memberIn resolves a member by name, by fingerprint, or by the first
+// characters of one.
+func memberIn(inst *Instance, ref string) (string, *Member, error) {
+	for fp, m := range inst.Members {
+		if fp == ref || strings.HasPrefix(fp, ref) || m.Name == ref {
+			return fp, m, nil
+		}
+	}
+	return "", nil, fmt.Errorf("no member %s: %w", ref, ErrNotFound)
+}
+
+// Ban blocklists a member and takes its routes out of the table. The member
+// stays: it is kept out, not forgotten, and unbanning it lets it back in.
+func (h *Hub) Ban(instanceID, ref, note string) error {
+	err := h.store.Update(instanceID, func(inst *Instance) error {
+		_, m, err := memberIn(inst, ref)
+		if err != nil {
+			return err
+		}
+		if m.Banned() {
+			return fmt.Errorf("%s is already banned", m.Name)
+		}
+
+		m.Events = append(m.Events, MemberEvent{Kind: EventBan, Note: note, At: time.Now().UTC()})
+		return nil
 	})
 	if err != nil {
 		return err
 	}
 
-	// The lighthouse holds the blocklist in its own configuration, so it has to
-	// be rebuilt before it will stop telling a banned member where anybody is.
+	return h.restartLighthouse(instanceID, "banned")
+}
+
+// Unban lets a banned member back in. Its certificate was never revoked and
+// never could be, so nothing has to be reissued for it to work again.
+func (h *Hub) Unban(instanceID, ref, note string) error {
+	err := h.store.Update(instanceID, func(inst *Instance) error {
+		_, m, err := memberIn(inst, ref)
+		if err != nil {
+			return err
+		}
+		if !m.Banned() {
+			return fmt.Errorf("%s is not banned", m.Name)
+		}
+
+		m.Events = append(m.Events, MemberEvent{Kind: EventUnban, Note: note, At: time.Now().UTC()})
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	return h.restartLighthouse(instanceID, "unbanned")
+}
+
+// restartLighthouse rebuilds a running lighthouse after the blocklist changed.
+//
+// The lighthouse holds the blocklist in its own configuration, so it has to be
+// rebuilt before it will stop telling a banned member where anybody is.
+func (h *Hub) restartLighthouse(instanceID, did string) error {
 	inst, err := h.store.Get(instanceID)
 	if err != nil {
 		return err
 	}
-	if h.lhs.isRunning(inst.ID) {
-		h.lhs.stop(inst.ID)
-		if err := h.lhs.start(inst, h.cfg.NebulaBind, h.log); err != nil {
-			return fmt.Errorf("banned, but the lighthouse did not come back: %w", err)
-		}
+	if !h.lhs.isRunning(inst.ID) {
+		return nil
+	}
+
+	h.lhs.stop(inst.ID)
+	if err := h.lhs.start(inst, h.cfg.NebulaBind, h.log); err != nil {
+		return fmt.Errorf("%s, but the lighthouse did not come back: %w", did, err)
 	}
 
 	return nil
 }
 
-// RemoveMember forgets a member: its record, its address and the request it
-// arrived with.
+// RemoveMember forgets a member: its record, its history, its address and the
+// request it arrived with. Its credentials are burned on the way out.
 //
-// Not the same as a ban. A ban keeps the member precisely so its certificate
-// stays on everybody's blocklist, and forgetting one would quietly let it back
-// in. This is for a member that is gone - its key deleted with the container
-// that held it - and it frees the address for whatever comes next.
+// This is the end of the line and it only follows a ban. Removing a member that
+// is not banned would free its address while it still holds a valid certificate
+// for the old one, and the next member to be admitted would be handed an
+// address something is already using. The certificate cannot be revoked, so the
+// only way out is to burn it first and then forget the rest.
 func (h *Hub) RemoveMember(instanceID, ref string) (*Member, error) {
 	var removed *Member
 
 	err := h.store.Update(instanceID, func(inst *Instance) error {
-		for fp, m := range inst.Members {
-			if fp != ref && !strings.HasPrefix(fp, ref) && m.Name != ref {
-				continue
-			}
-
-			if m.Kind == KindOwner {
-				return fmt.Errorf("%s owns this instance and cannot be removed from it", m.Name)
-			}
-			if m.Banned {
-				return fmt.Errorf("%s is banned, and forgetting it would take its certificate off every blocklist", m.Name)
-			}
-
-			removed = m
-			delete(inst.Members, fp)
-			delete(inst.Allocations, fp)
-			delete(inst.Allocations6, fp)
-
-			// The request it arrived with goes too, or it would sit in the
-			// listing as something already decided about a member that is no
-			// longer here.
-			for id, record := range inst.Requests {
-				if record.Fingerprint == fp {
-					delete(inst.Requests, id)
-				}
-			}
-
-			return nil
+		fp, m, err := memberIn(inst, ref)
+		if err != nil {
+			return err
 		}
 
-		return fmt.Errorf("no member %s", ref)
+		if m.Kind == KindOwner {
+			return fmt.Errorf("%s owns this instance and cannot be removed from it", m.Name)
+		}
+		if !m.Banned() {
+			return fmt.Errorf("%s is not banned: ban it first, or its certificate would still be good for the address this frees", m.Name)
+		}
+
+		// Both the key and the certificate. The certificate goes onto every
+		// blocklist, and the key stops the same machine enrolling again for a
+		// fresh one, which is what "removed" is meant to mean.
+		inst.Burned = append(inst.Burned, Burned{
+			Fingerprint:     fp,
+			CertFingerprint: m.CertFingerprint,
+		})
+
+		removed = m
+		delete(inst.Members, fp)
+		delete(inst.Allocations, fp)
+		delete(inst.Allocations6, fp)
+
+		// The request it arrived with goes too, or it would sit in the
+		// listing as something already decided about a member that is no
+		// longer here.
+		for id, record := range inst.Requests {
+			if record.Fingerprint == fp {
+				delete(inst.Requests, id)
+			}
+		}
+
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
+	// No lighthouse restart: the certificate was on the blocklist as a banned
+	// member's and is on it now as a burned one, so the configuration it would
+	// be rebuilt from is the same configuration.
+
 	h.log.Info("member removed", "instance", instanceID, "name", removed.Name, "address", removed.Address)
 
 	return removed, nil
+}
+
+// SetSharedToken replaces the secret a connector's enrollment is authenticated
+// with.
+//
+// Only enrollments are authenticated with it, and only the ones that have not
+// happened yet: an admitted member holds a certificate and never presents the
+// token again. So this locks out every connector configuration handed out so
+// far without touching anything currently running.
+func (h *Hub) SetSharedToken(instanceID, token string) error {
+	if token == "" {
+		return fmt.Errorf("a shared token is required")
+	}
+
+	return h.store.Update(instanceID, func(inst *Instance) error {
+		inst.SharedToken = token
+		return nil
+	})
 }
 
 // Members returns everyone admitted to an instance.

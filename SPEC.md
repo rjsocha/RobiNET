@@ -195,12 +195,27 @@ trying; it stops appearing.
 
 **ban** - add the certificate fingerprint to the nebula blocklist and reload.
 Nebula implements this natively (`cert.CAPool.BlocklistFingerprint`,
-`pki.blocklist`); robinet only writes the list.
+`pki.blocklist`); robinet only writes the list. The member stays, holding its
+name and its address, and **unban** takes the fingerprint off again. Each
+decision is appended to the member's own list with the note explaining it, and
+the current state is the last one: there is no separate flag to reconcile.
+
+**remove** - forget the member entirely, and only after a ban. Its key and its
+certificate are burned: the certificate stays on the blocklist with no record
+left to carry it, and an enrollment from that key is refused by the hub. This is
+what frees the name and the address, and nothing takes either credential off the
+burned list.
+
+Removal has to follow a ban because a certificate cannot be revoked. A member
+that is not banned holds a valid one for its address, so freeing that address
+would hand the next applicant something already in use.
 
 Reject, forget and ban are keyed on the applicant's public key. They hold only
 as long as the connector keeps its key, so a connector without a persistent
 volume returns as a new identity. The connector warns loudly at startup when its
-state directory is not persistent.
+state directory is not persistent. Removal is the exception: the burned key is
+remembered by the instance, so returning under it is refused rather than shown
+to the owner again.
 
 ## 9. Routes
 
@@ -212,7 +227,7 @@ detection off, so exactly what is announced can be chosen.
 announcing a prefix that is already assigned cannot be approved. This is not an
 error to work around, it is the shape of the problem: two Railway environments
 both announce `10.128.0.0/9`, and one route table cannot hold both. Replacing a
-connector is ban plus forget on the old one, then approve the new one. The panel
+connector is ban then remove on the old one, then approve the new one. The panel
 shows whether the holder's tunnel is currently alive, since the tenant daemon
 runs the lighthouse and has the hostmap.
 
