@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -321,14 +320,6 @@ func printConnectorHint(endpoint string) {
 // connectorImage is where the connector is published.
 const connectorImage = "wyga/robinet:1"
 
-// errRestartWanted turns a requested restart into a non-zero exit, whatever
-// the unit's Restart= says.
-var errRestartWanted = errors.New("restarting on request")
-
-// exitRestart is that status. Anything non-zero would do; a distinctive one
-// makes a journal say which exit this was.
-const exitRestart = 87
-
 func newUpCmd() *cobra.Command {
 	var (
 		state    string
@@ -398,14 +389,11 @@ reachable here without anybody reissuing a certificate.`,
 				}
 			})
 
-			err = eg.Wait()
-			if err == nil && d.RestartWanted() {
-				// Not a failure, but a unit that predates robinet restart says
-				// Restart=on-failure, and a zero status there means staying
-				// down. Say something happened.
-				return errRestartWanted
-			}
-			return err
+			// A requested restart is a clean exit and says so. The unit is
+			// Restart=always, and systemd tells a process that ended by
+			// itself from one it was told to stop, so nothing has to be
+			// dressed up as a failure to come back.
+			return eg.Wait()
 		},
 	}
 

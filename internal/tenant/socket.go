@@ -395,20 +395,10 @@ func (d *Daemon) handleRestart(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	d.log.Info("restarting on request")
-	d.restart.Store(true)
 	go func() {
 		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
 	}()
 }
-
-// RestartWanted reports whether the daemon came down because somebody asked it
-// to, rather than because it was stopped.
-//
-// It decides the exit status, and the exit status decides whether systemd
-// starts it again: a unit written before this existed says Restart=on-failure,
-// where a clean exit means staying down. Exiting non-zero is what makes
-// robinet restart work on a unit that has not been rewritten yet.
-func (d *Daemon) RestartWanted() bool { return d.restart.Load() }
 
 func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 	status := Status{

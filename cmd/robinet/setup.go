@@ -158,13 +158,22 @@ func renderUnit(exePath, statePath, socketPath, logLevel, owner string) string {
 	//
 	// Restart=always rather than on-failure: robinet restart asks the daemon to
 	// exit cleanly so it comes back on a newly installed binary, and a clean
-	// exit is not a failure. Systemd's start limit still gives up on a daemon
-	// that cannot start at all.
+	// exit is not a failure. Systemd tells a process that ended by itself from
+	// one it was told to stop, so a systemctl stop still stops it.
+	//
+	// The start limit is written out rather than left to whatever the
+	// distribution defaults to, and its window is a minute rather than the
+	// usual ten seconds. Five restarts half a second apart take two and a half
+	// seconds, so a ten second window catches a daemon that dies instantly and
+	// misses the one that dies after a few seconds of work - which loops
+	// forever, since the counter never fills.
 	return fmt.Sprintf(`[Unit]
 Description=robinet tenant daemon
 Documentation=https://github.com/rjsocha/robinet
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -181,7 +190,7 @@ ProtectHome=read-only
 ReadWritePaths=%s
 PrivateTmp=yes
 Restart=always
-RestartSec=2
+RestartSec=500ms
 
 [Install]
 WantedBy=multi-user.target

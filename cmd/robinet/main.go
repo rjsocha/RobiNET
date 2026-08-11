@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -35,16 +34,13 @@ func main() {
 
 // exitCodeFor decides what the process says on the way out.
 //
-// A requested restart arrives as SIGTERM, so it has to be recognized before
-// the interrupted case: that one exits zero, and zero is what a unit saying
-// Restart=on-failure treats as "stay down".
+// Being signalled is not a failure, however it was asked for: a restart, a
+// systemctl stop and a ctrl-c all arrive the same way and all end at zero. The
+// unit says Restart=always, so coming back is systemd's business and does not
+// have to be provoked with a status.
 func exitCodeFor(err, ctxErr error) int {
 	switch {
-	case err == nil:
-		return 0
-	case errors.Is(err, errRestartWanted):
-		return exitRestart
-	case ctxErr != nil:
+	case err == nil, ctxErr != nil:
 		return 0
 	default:
 		return 1

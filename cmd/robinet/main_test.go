@@ -8,13 +8,15 @@ import (
 	"testing"
 )
 
-func TestARequestedRestartExitsNonZero(t *testing.T) {
-	// What the daemon reports, and what a signal leaves behind: the restart
-	// came in as SIGTERM, so both are present at once.
-	err := fmt.Errorf("daemon stopped: %w", errRestartWanted)
+func TestARequestedRestartIsNotAFailure(t *testing.T) {
+	// The restart arrives as SIGTERM, so the daemon reports being stopped and
+	// the context is cancelled at the same time. Both mean zero: the unit is
+	// Restart=always, and a status invented to provoke it would show up as a
+	// failed run every time somebody upgrades.
+	err := fmt.Errorf("daemon stopped: %w", context.Canceled)
 
-	if code := exitCodeFor(err, context.Canceled); code != exitRestart {
-		t.Fatalf("exit code %d, wanted %d: a unit with Restart=on-failure would leave the daemon down", code, exitRestart)
+	if code := exitCodeFor(err, context.Canceled); code != 0 {
+		t.Fatalf("exit code %d, wanted 0", code)
 	}
 }
 

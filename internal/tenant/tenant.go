@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/rjsocha/robinet/internal/ca"
@@ -173,10 +172,6 @@ type Daemon struct {
 		mu      sync.Mutex
 		running map[string]*router
 	}
-
-	// restart is set when the control socket was asked for one, and read after
-	// the daemon comes down to decide the exit status.
-	restart atomic.Bool
 
 	state *State
 	hub   *hubClient
