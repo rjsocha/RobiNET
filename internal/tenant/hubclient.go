@@ -293,12 +293,23 @@ func (c *hubClient) do(ctx context.Context, method, path string, in, out any) er
 	return nil
 }
 
+// responseError says why the hub refused, in the hub's own words.
+//
+// The refusal reaches a terminal by way of the daemon, so what it says is what
+// the operator reads. The status line and the machine-readable code carry
+// nothing they do not already know - the message names the thing and usually
+// the way out of it - and prefixing every refusal with "hub returned 400 Bad
+// Request: bad_request:" only buries that. They stand in when there is no
+// message to print, which is the one case where they are all there is.
 func responseError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 
 	var e enroll.Error
 	if json.Unmarshal(body, &e) == nil && e.Code != "" {
-		return fmt.Errorf("hub returned %s: %w", resp.Status, &e)
+		if e.Message != "" {
+			return errors.New(e.Message)
+		}
+		return fmt.Errorf("hub returned %s: %s", resp.Status, e.Code)
 	}
 
 	return fmt.Errorf("hub returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
