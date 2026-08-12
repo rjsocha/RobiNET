@@ -205,6 +205,31 @@ func TestSharedInstance(t *testing.T) {
 		t.Fatalf("jacek sees %d routes, want both of the connector's", len(jacekTable.Routes))
 	}
 
+	// What nebula would be handed, since nothing is running here. It carries
+	// the route the connector announced, and it does not carry jacek's key
+	// unless asked: this is printed on a terminal and pasted into tickets.
+	shown, err := jacek.ConnectionConfig(ctx, created.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(shown), "10.128.0.0/9") {
+		t.Fatalf("the configuration carries no route:\n%s", shown)
+	}
+	if strings.Contains(string(shown), conn.PrivateKey) {
+		t.Fatal("a signing key was printed without --show-keys")
+	}
+	if !strings.Contains(string(shown), hub.RedactedKey) {
+		t.Fatalf("nothing says the key was left out:\n%s", shown)
+	}
+
+	withKeys, err := jacek.ConnectionConfig(ctx, created.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(withKeys), "NEBULA X25519 PRIVATE KEY") {
+		t.Fatal("--show-keys left the key out")
+	}
+
 	// An owner cannot ask to be let into its own instance: it is already in
 	// it, and enrolling would leave it deciding about itself.
 	if err := robert.Connect(ctx, created.ID); err != nil {

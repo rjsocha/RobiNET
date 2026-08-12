@@ -261,6 +261,15 @@ func LighthouseConfig(inst *Instance, cfg Config, showKeys bool) ([]byte, error)
 		return raw, nil
 	}
 
+	return RedactKey(raw)
+}
+
+// RedactKey takes the signing key out of a rendered nebula configuration.
+//
+// Here rather than beside each caller because a tenant's configuration carries
+// the same field and hiding it has to mean the same thing in both: one word to
+// grep for, one place to change if the shape ever moves.
+func RedactKey(raw []byte) ([]byte, error) {
 	// Redacted on the rendered tree rather than while rendering, so what is
 	// printed has the shape of the real thing down to the last key.
 	var tree map[string]any

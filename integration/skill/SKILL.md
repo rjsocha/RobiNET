@@ -31,6 +31,7 @@ robinet status
 | `speaks a different control protocol` | `robinet restart` |
 | a connection is `waiting` | nothing; the owner has not decided |
 | a connection is `down` | wait one refresh, 15s |
+| a connection is still `down`, or the log blames the configuration | `robinet instance config <name>` - what nebula was handed, as it was handed. Read it; do not paste it back to the user unasked, it is long |
 
 `robinet join` and `robinet setup` are the user's to run: the first signs with
 their key and then asks for their password to start the daemon. Never run them

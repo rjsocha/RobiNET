@@ -21,6 +21,13 @@ type runner struct {
 	control  *nebula.Control
 	cfg      *config.C
 	log      *slog.Logger
+
+	// raw is what nebula was last handed, kept so it can be shown. Rendering
+	// it again on demand would answer a different question: the route table
+	// comes from the hub and moves under us, so a fresh render says what the
+	// next reload would carry rather than what this process is running on.
+	// Guarded by runners.mu, like the map that leads here.
+	raw []byte
 }
 
 // runners tracks what is up.
@@ -64,6 +71,7 @@ func (rs *runners) start(conn *Connection, table *hub.RouteTable, local choices,
 		control:  control,
 		cfg:      &c,
 		log:      l,
+		raw:      raw,
 	}
 
 	l.Info("connected", "address", conn.Address, "routes", len(table.Routes))
@@ -86,7 +94,29 @@ func (rs *runners) reload(conn *Connection, table *hub.RouteTable, local choices
 		return err
 	}
 
-	return r.cfg.ReloadConfigString(string(raw))
+	if err := r.cfg.ReloadConfigString(string(raw)); err != nil {
+		return err
+	}
+
+	// Recorded only once nebula has taken it, so what is shown is never a
+	// configuration this process refused.
+	rs.mu.Lock()
+	r.raw = raw
+	rs.mu.Unlock()
+
+	return nil
+}
+
+// loaded returns what nebula holds for an instance, if it is running at all.
+func (rs *runners) loaded(instance string) ([]byte, bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+
+	r, ok := rs.running[instance]
+	if !ok {
+		return nil, false
+	}
+	return r.raw, true
 }
 
 func (rs *runners) stop(instance string) {

@@ -35,6 +35,7 @@ to one somebody else owns to reach theirs.`,
 		newDeleteCmd(),
 		newDetachCmd(),
 		newInstanceTokenCmd(),
+		newInstanceConfigCmd(),
 	)
 
 	return cmd
@@ -80,6 +81,54 @@ func newShowCmd() *cobra.Command {
 	}
 
 	addSocketFlag(cmd, &socket)
+	return cmd
+}
+
+// newInstanceConfigCmd prints the nebula configuration one connection runs on,
+// the same question `robinet hub config` answers on the other side.
+func newInstanceConfigCmd() *cobra.Command {
+	var (
+		socket   string
+		showKeys bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "config <instance>",
+		Short: "Print the nebula configuration a connection runs on",
+		Long: `config prints what nebula was handed for one instance this machine is in: the
+certificate it presents, the lighthouse it talks to, the routes on its device,
+the blocklist it enforces.
+
+What the running nebula was loaded from, not a fresh guess at it. When nothing
+is running for that instance - it is still waiting to be approved, or its start
+was refused - what would be handed over is rendered instead, and the first line
+says so.
+
+This machine's signing key is left out unless --show-keys asks. Everything else
+is public by nature or already known to every member of that instance.`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeInstances(socket, true),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := socketPath(socket)
+			if err != nil {
+				return err
+			}
+
+			var out tenant.ConfigResult
+			err = newControl(path).do(cmd.Context(), http.MethodPost, "/config",
+				tenant.ConfigRequest{Instance: args[0], ShowKeys: showKeys}, &out)
+			if err != nil {
+				return err
+			}
+
+			fmt.Print(out.Config)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&showKeys, "show-keys", false, "print this machine's signing key too")
+	addSocketFlag(cmd, &socket)
+
 	return cmd
 }
 

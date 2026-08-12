@@ -29,6 +29,21 @@ type ConnectRequest struct {
 	Instance string `json:"instance"`
 }
 
+// ConfigRequest asks what nebula was handed for one connection.
+type ConfigRequest struct {
+	Instance string `json:"instance"`
+
+	// ShowKeys asks for this machine's signing key as well. Redaction happens
+	// here rather than in the command line, so the key does not cross the
+	// socket for a caller that did not ask for it.
+	ShowKeys bool `json:"show_keys,omitempty"`
+}
+
+// ConfigResult carries a rendered nebula configuration.
+type ConfigResult struct {
+	Config string `json:"config"`
+}
+
 // ApproveRequest admits a pending applicant.
 type ApproveRequest struct {
 	ID string `json:"id"`
@@ -118,6 +133,7 @@ func (d *Daemon) Serve(ctx context.Context, path string) error {
 	mux.HandleFunc("GET /members", d.handleMembers)
 	mux.HandleFunc("GET /reach", d.handleReach)
 	mux.HandleFunc("POST /show", d.handleShow)
+	mux.HandleFunc("POST /config", d.handleConfig)
 	mux.HandleFunc("GET /pending", d.handlePending)
 	mux.HandleFunc("POST /create", d.handleCreate)
 	mux.HandleFunc("POST /connect", d.handleConnect)
@@ -590,6 +606,22 @@ func (d *Daemon) handleShow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, info)
+}
+
+func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
+	var req ConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	raw, err := d.ConnectionConfig(r.Context(), req.Instance, req.ShowKeys)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, ConfigResult{Config: string(raw)})
 }
 
 func (d *Daemon) handleMembers(w http.ResponseWriter, r *http.Request) {

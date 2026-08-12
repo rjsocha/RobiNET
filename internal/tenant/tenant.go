@@ -499,6 +499,48 @@ func (d *Daemon) Show(ctx context.Context, wanted string) (map[string]any, error
 	return nil, fmt.Errorf("no instance %q on this hub", wanted)
 }
 
+// ConnectionConfig is the nebula configuration behind one connection.
+//
+// The bytes the running nebula was loaded from, when there is a running one.
+// Because when nebula fails on something it was told, the only other way to
+// know what it was told is to reason about the renderer.
+//
+// A connection can sit in state without running: waiting to be approved, a
+// prefix another instance already carries, a hub that was unreachable when it
+// was time to start. Those are the moments somebody asks this question, so a
+// fresh render stands in rather than a refusal. The first line says which of
+// the two arrived, since they answer different questions.
+func (d *Daemon) ConnectionConfig(ctx context.Context, ref string, showKeys bool) ([]byte, error) {
+	conn, ok := d.connectionFor(ref)
+	if !ok {
+		return nil, fmt.Errorf("not connected to %s", ref)
+	}
+
+	header := "# what nebula is running on, as it was last loaded\n"
+
+	raw, live := d.run.loaded(conn.InstanceID)
+	if !live {
+		table, err := d.hub.routes(ctx, conn.InstanceID)
+		if err != nil {
+			return nil, err
+		}
+		raw, err = renderConfig(conn, table, d.state.choices())
+		if err != nil {
+			return nil, err
+		}
+		header = "# nothing is running for this instance: rendered now, from the hub's route table\n"
+	}
+
+	if !showKeys {
+		var err error
+		if raw, err = hub.RedactKey(raw); err != nil {
+			return nil, err
+		}
+	}
+
+	return append([]byte(header), raw...), nil
+}
+
 // TokenResult is a replaced shared token and where it has to be pasted.
 type TokenResult struct {
 	Instance string `json:"instance"`

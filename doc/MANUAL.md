@@ -200,6 +200,7 @@ waiting for a decision
 | `robinet dns list` | what the resolver would be told, without changing anything |
 | `robinet dns alias <name> <as>` | answer for a name space under a shorter name here; local, told to nobody |
 | `robinet member forget <id>` | drops the record so it stops appearing |
+| `robinet instance config <name>` | the nebula configuration this machine's connection to that instance is running on, as nebula was handed it; the signing key is left out unless `--show-keys` asks. For a failure nebula reports about something it was told, and for nothing else |
 
 `KIND` is `connector` when it carries routes and `tenant` when it consumes
 them. A tenant is granted no routes to carry, whatever it asked for.
